@@ -1,0 +1,25 @@
+{
+  "productCode": "B07",
+  "basicDetails": {
+    "phEqualsLi": true,
+    "insured": {
+      "gender": "female",
+      "dateOfBirth": "01/01/1975",
+      "occupation": "engineer"
+    },
+    "proposer": {
+      "name": "John Doe",
+      "email": "john.doe@example.com",
+      "phoneNumber": "1234567890"
+    }
+  },
+  "coverageDetails": {
+    "sumInsured": 500000,
+    "policyTerm": 20,
+    "paymentMode": "annual"
+  },
+  "additionalBenefits": {
+    "criticalIllness": true,
+    "accidentalDeath": false
+  }
+}

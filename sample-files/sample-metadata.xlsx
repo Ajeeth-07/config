@@ -1,0 +1,14 @@
+fieldName,label,dataType,required,options,validation
+productCode,Product Code,text,true,,Must be alphanumeric
+basicDetails.phEqualsLi,Proposer equals Life Insured,boolean,false,,
+basicDetails.insured.gender,Gender,select,true,"male,female,other",
+basicDetails.insured.dateOfBirth,Date of Birth,date,true,,Must be in DD/MM/YYYY format
+basicDetails.insured.occupation,Occupation,text,true,,
+basicDetails.proposer.name,Proposer Name,text,true,,Minimum 3 characters
+basicDetails.proposer.email,Email Address,text,true,,Valid email format
+basicDetails.proposer.phoneNumber,Phone Number,text,true,,10 digits only
+coverageDetails.sumInsured,Sum Insured,number,true,,Minimum 100000
+coverageDetails.policyTerm,Policy Term (years),number,true,,Between 5 and 30 years
+coverageDetails.paymentMode,Payment Mode,select,true,"annual,semi-annual,quarterly,monthly",
+additionalBenefits.criticalIllness,Critical Illness Cover,boolean,false,,
+additionalBenefits.accidentalDeath,Accidental Death Benefit,boolean,false,,
