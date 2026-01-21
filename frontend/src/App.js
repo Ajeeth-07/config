@@ -29,8 +29,8 @@ function App() {
     <div className="App">
       <div className="container">
         <header className="header">
-          <h1>🤖 AI Input Field Generator</h1>
-          <p>Upload JSON and Excel files to automatically generate input fields</p>
+          <h1>AI Input Configuration Generator</h1>
+          <p>Upload JSON and Excel files to generate input configurations with unique identifiers, data types & regex patterns</p>
         </header>
 
         <FileUpload 

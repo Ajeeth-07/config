@@ -1,109 +1,54 @@
 import React, { useState } from 'react';
+import axios from 'axios';
 import './FieldDisplay.css';
 
 function FieldDisplay({ data }) {
-  const [activeTab, setActiveTab] = useState('fields');
-  const [formValues, setFormValues] = useState({});
+  const [activeTab, setActiveTab] = useState('configs');
+  const [downloading, setDownloading] = useState(false);
 
-  const handleInputChange = (fieldName, value) => {
-    setFormValues({
-      ...formValues,
-      [fieldName]: value
-    });
-  };
-
-  const renderInputField = (field) => {
-    const value = formValues[field.fieldName] !== undefined 
-      ? formValues[field.fieldName] 
-      : field.defaultValue || '';
-
-    switch (field.dataType?.toLowerCase()) {
-      case 'select':
-      case 'dropdown':
-        return (
-          <select
-            value={value}
-            onChange={(e) => handleInputChange(field.fieldName, e.target.value)}
-            required={field.required}
-            className="form-select"
-          >
-            <option value="">Select {field.label}</option>
-            {field.options?.map((option, idx) => (
-              <option key={idx} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        );
-
-      case 'boolean':
-      case 'checkbox':
-        return (
-          <div className="checkbox-wrapper">
-            <input
-              type="checkbox"
-              checked={value === true || value === 'true'}
-              onChange={(e) => handleInputChange(field.fieldName, e.target.checked)}
-              className="form-checkbox"
-            />
-            <span>{field.label}</span>
-          </div>
-        );
-
-      case 'date':
-        return (
-          <input
-            type="date"
-            value={value}
-            onChange={(e) => handleInputChange(field.fieldName, e.target.value)}
-            required={field.required}
-            className="form-input"
-          />
-        );
-
-      case 'number':
-        return (
-          <input
-            type="number"
-            value={value}
-            onChange={(e) => handleInputChange(field.fieldName, e.target.value)}
-            required={field.required}
-            className="form-input"
-          />
-        );
-
-      case 'textarea':
-        return (
-          <textarea
-            value={value}
-            onChange={(e) => handleInputChange(field.fieldName, e.target.value)}
-            required={field.required}
-            className="form-textarea"
-            rows="3"
-          />
-        );
-
-      default:
-        return (
-          <input
-            type="text"
-            value={value}
-            onChange={(e) => handleInputChange(field.fieldName, e.target.value)}
-            required={field.required}
-            className="form-input"
-          />
-        );
+  const handleDownload = async () => {
+    if (!data.outputFile) return;
+    
+    setDownloading(true);
+    try {
+      const response = await axios.get(`/api/upload/download/${data.outputFile}`, {
+        responseType: 'blob'
+      });
+      
+      // Create blob link to download
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', data.outputFile);
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Download failed:', error);
+      alert('Failed to download file. Please try again.');
     }
+    setDownloading(false);
   };
 
   return (
     <div className="field-display-container">
+      <div className="success-banner">
+        <h2>✅ Input Configurations Generated Successfully!</h2>
+        <p>{data.configCount} input configurations created</p>
+        <button className="download-btn" onClick={handleDownload} disabled={downloading}>
+          {downloading ? '⏳ Downloading...' : '📥 Download Excel File'}
+        </button>
+      </div>
+
       <div className="tabs">
         <button
-          className={`tab ${activeTab === 'fields' ? 'active' : ''}`}
-          onClick={() => setActiveTab('fields')}
+          className={`tab ${activeTab === 'configs' ? 'active' : ''}`}
+          onClick={() => setActiveTab('configs')}
         >
-          Generated Fields ({data.fieldCount})
+          Generated Configs ({data.configCount})
         </button>
         <button
           className={`tab ${activeTab === 'json' ? 'active' : ''}`}
@@ -120,35 +65,49 @@ function FieldDisplay({ data }) {
       </div>
 
       <div className="tab-content">
-        {activeTab === 'fields' && (
-          <div className="fields-grid">
-            <h2>✨ Generated Input Fields</h2>
-            <div className="form-container">
-              {data.generatedFields?.map((field, index) => (
-                <div key={index} className="field-item">
-                  <label className="field-label">
-                    {field.label}
-                    {field.required && <span className="required">*</span>}
-                  </label>
-                  <div className="field-info">
-                    <span className="field-name">{field.fieldName}</span>
-                    <span className="field-type">{field.dataType}</span>
-                  </div>
-                  {renderInputField(field)}
-                  {field.validation && (
-                    <span className="validation-info">
-                      ℹ️ {field.validation}
-                    </span>
-                  )}
-                </div>
-              ))}
+        {activeTab === 'configs' && (
+          <div className="configs-view">
+            <h3>📋 Generated Input Configurations</h3>
+            <p className="hint">These configurations will be in the downloaded Excel file</p>
+            
+            <div className="table-wrapper">
+              <table className="configs-table">
+                <thead>
+                  <tr>
+                    <th>Unique ID</th>
+                    <th>Field Path</th>
+                    <th>Label</th>
+                    <th>Data Type</th>
+                    <th>Required</th>
+                    <th>Regex</th>
+                    <th>List Values</th>
+                    <th>Sample</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.generatedConfigs?.map((config, idx) => (
+                    <tr key={idx}>
+                      <td className="unique-id">{config.uniqueIdentifier}</td>
+                      <td className="field-path">{config.fieldPath}</td>
+                      <td>{config.label}</td>
+                      <td className="data-type">{config.dataType}</td>
+                      <td className={config.required === 'YES' ? 'required-yes' : 'required-no'}>
+                        {config.required}
+                      </td>
+                      <td className="regex">{config.regex || '-'}</td>
+                      <td className="list-values">{config.listValues || '-'}</td>
+                      <td className="sample-value">{config.sampleValue || '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
 
         {activeTab === 'json' && (
           <div className="json-view">
-            <h2>📄 Original JSON Structure</h2>
+            <h3>📄 Original JSON Structure</h3>
             <pre className="json-code">
               {JSON.stringify(data.originalJson, null, 2)}
             </pre>
@@ -157,7 +116,7 @@ function FieldDisplay({ data }) {
 
         {activeTab === 'metadata' && (
           <div className="metadata-view">
-            <h2>📊 Excel Metadata</h2>
+            <h3>📊 Excel Metadata</h3>
             {data.excelMetadata && data.excelMetadata.length > 0 ? (
               <div className="table-wrapper">
                 <table className="metadata-table">

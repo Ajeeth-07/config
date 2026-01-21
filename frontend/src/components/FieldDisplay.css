@@ -6,6 +6,41 @@
   overflow: hidden;
 }
 
+.success-banner {
+  background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+  color: white;
+  padding: 30px;
+  text-align: center;
+}
+
+.success-banner h2 {
+  margin: 0 0 10px 0;
+  font-size: 1.5rem;
+}
+
+.success-banner p {
+  margin: 0 0 20px 0;
+  opacity: 0.9;
+}
+
+.download-btn {
+  background: white;
+  color: #38a169;
+  border: none;
+  padding: 15px 40px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.download-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2);
+}
+
 .tabs {
   display: flex;
   background: #f7fafc;
@@ -37,92 +72,114 @@
   padding: 30px;
 }
 
-.fields-grid h2,
-.json-view h2,
-.metadata-view h2 {
+.configs-view h3,
+.json-view h3,
+.metadata-view h3 {
+  margin-bottom: 15px;
+  color: #2d3748;
+}
+
+.hint {
+  color: #718096;
+  font-size: 0.9rem;
   margin-bottom: 20px;
-  color: #2d3748;
 }
 
-.form-container {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: 20px;
+.table-wrapper {
+  overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
 }
 
-.field-item {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 15px;
-  background: #f7fafc;
-  border-radius: 8px;
-  border: 1px solid #e2e8f0;
-}
-
-.field-label {
-  font-weight: 600;
-  color: #2d3748;
-  font-size: 0.95rem;
-}
-
-.required {
-  color: #e53e3e;
-  margin-left: 4px;
-}
-
-.field-info {
-  display: flex;
-  justify-content: space-between;
+.configs-table {
+  width: 100%;
+  border-collapse: collapse;
   font-size: 0.85rem;
 }
 
-.field-name {
-  color: #667eea;
-  font-family: monospace;
+.configs-table th,
+.configs-table td {
+  padding: 12px 10px;
+  text-align: left;
+  border-bottom: 1px solid #e2e8f0;
+  white-space: nowrap;
 }
 
-.field-type {
-  background: #edf2f7;
-  padding: 2px 8px;
+.configs-table th {
+  background: #2d3748;
+  color: white;
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.configs-table tbody tr:hover {
+  background: #f7fafc;
+}
+
+.configs-table tbody tr:nth-child(even) {
+  background: #fafafa;
+}
+
+.configs-table tbody tr:nth-child(even):hover {
+  background: #f0f0f0;
+}
+
+.unique-id {
+  font-family: 'Courier New', monospace;
+  font-weight: 700;
+  color: #667eea;
+  background: #eef2ff;
+  padding: 4px 8px !important;
   border-radius: 4px;
+}
+
+.field-path {
+  font-family: 'Courier New', monospace;
   color: #4a5568;
   font-size: 0.8rem;
 }
 
-.form-input,
-.form-select,
-.form-textarea {
-  padding: 10px;
-  border: 2px solid #cbd5e0;
-  border-radius: 6px;
-  font-size: 0.95rem;
-  transition: all 0.3s ease;
+.data-type {
+  background: #e2e8f0;
+  padding: 4px 8px !important;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
 }
 
-.form-input:focus,
-.form-select:focus,
-.form-textarea:focus {
-  outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+.required-yes {
+  color: #38a169;
+  font-weight: 700;
 }
 
-.checkbox-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.required-no {
+  color: #a0aec0;
 }
 
-.form-checkbox {
-  width: 20px;
-  height: 20px;
-  cursor: pointer;
+.regex {
+  font-family: 'Courier New', monospace;
+  font-size: 0.7rem;
+  color: #e53e3e;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.validation-info {
-  font-size: 0.85rem;
-  color: #718096;
+.list-values {
+  font-size: 0.8rem;
+  color: #805ad5;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sample-value {
+  font-family: 'Courier New', monospace;
+  color: #2b6cb0;
+  font-size: 0.8rem;
 }
 
 .json-view,
@@ -139,10 +196,6 @@
   overflow-x: auto;
   font-size: 0.9rem;
   line-height: 1.6;
-}
-
-.table-wrapper {
-  overflow-x: auto;
 }
 
 .metadata-table {
@@ -174,7 +227,12 @@
     flex-direction: column;
   }
   
-  .form-container {
-    grid-template-columns: 1fr;
+  .configs-table {
+    font-size: 0.75rem;
+  }
+  
+  .configs-table th,
+  .configs-table td {
+    padding: 8px 6px;
   }
 }

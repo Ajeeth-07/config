@@ -27,9 +27,10 @@ const upload = multer({
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype) || 
                      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-                     file.mimetype === 'application/vnd.ms-excel';
+                     file.mimetype === 'application/vnd.ms-excel' ||
+                     file.mimetype === 'application/json';
     
-    if (extname && mimetype) {
+    if (extname || mimetype) {
       return cb(null, true);
     } else {
       cb(new Error('Only JSON and Excel files are allowed!'));
@@ -37,7 +38,7 @@ const upload = multer({
   }
 });
 
-// Upload and process files
+// Upload and process files - returns Excel file
 router.post('/process', upload.fields([
   { name: 'jsonFile', maxCount: 1 },
   { name: 'excelFile', maxCount: 1 }
@@ -64,13 +65,40 @@ router.post('/process', upload.fields([
     console.error('Error processing files:', error);
     
     // Clean up files on error
-    if (req.files.jsonFile) fs.unlinkSync(req.files.jsonFile[0].path);
-    if (req.files.excelFile) fs.unlinkSync(req.files.excelFile[0].path);
+    if (req.files && req.files.jsonFile) {
+      try { fs.unlinkSync(req.files.jsonFile[0].path); } catch (e) {}
+    }
+    if (req.files && req.files.excelFile) {
+      try { fs.unlinkSync(req.files.excelFile[0].path); } catch (e) {}
+    }
     
     res.status(500).json({ 
       error: error.message || 'Failed to process files' 
     });
   }
+});
+
+// Download generated Excel file
+router.get('/download/:filename', (req, res) => {
+  const filename = req.params.filename;
+  const filePath = path.join(__dirname, '..', 'outputs', filename);
+  
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  
+  const fileStream = fs.createReadStream(filePath);
+  fileStream.pipe(res);
+  
+  // Clean up file after download (optional - you can remove this if you want to keep files)
+  fileStream.on('end', () => {
+    setTimeout(() => {
+      try { fs.unlinkSync(filePath); } catch (e) {}
+    }, 5000);
+  });
 });
 
 module.exports = router;
