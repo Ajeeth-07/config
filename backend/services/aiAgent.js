@@ -2,7 +2,9 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 const fs = require('fs');
 const XLSX = require('xlsx');
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+// Hardcoded API key for testing (remove process.env to rule out .env loading issues)
+const GEMINI_API_KEY = 'AIzaSyBRw06FY4gBbG2o_seTkUf638iD_q10_1o';
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 /**
  * Validates and reads JSON file
@@ -71,7 +73,7 @@ async function processFiles(jsonFilePath, excelFilePath) {
   const flattenedJson = flattenJson(jsonResult.data);
 
   // Step 4: Use Gemini AI to generate input field definitions
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-3-flash-preview" });
 
   const prompt = `You are an expert AI assistant helping to generate input field definitions for an insurance form builder.
 
