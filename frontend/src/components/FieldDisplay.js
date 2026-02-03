@@ -250,7 +250,7 @@ function FieldDisplay({ data }) {
                         <tr>
                           <th>Batch #</th>
                           <th>Sheet</th>
-                          <th>Columns</th>
+                          <th>Rows</th>
                           <th>Prompt Tokens</th>
                           <th>Completion Tokens</th>
                           <th>Total Tokens</th>
@@ -261,7 +261,7 @@ function FieldDisplay({ data }) {
                           <tr key={idx}>
                             <td>{batch.batch}</td>
                             <td>{batch.sheet}</td>
-                            <td>{batch.columns}</td>
+                            <td>{batch.rows || batch.columns}</td>
                             <td>{formatNumber(batch.promptTokens)}</td>
                             <td>{formatNumber(batch.completionTokens)}</td>
                             <td className="total-cell">

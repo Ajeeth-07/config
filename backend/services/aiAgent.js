@@ -705,7 +705,7 @@ async function processFiles(jsonFilePath, mappingFilePath) {
         totalTokenUsage.batchBreakdown.push({
           batch: batchNumber,
           sheet: sheetName,
-          columns: batchColumns.length,
+          rows: batchRows.length,
           ...batchResult.tokenUsage,
         });
 
