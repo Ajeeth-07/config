@@ -4,31 +4,34 @@ import './FileUpload.css';
 
 function FileUpload({ onSuccess, onError, onLoading, onReset }) {
   const [jsonFile, setJsonFile] = useState(null);
-  const [excelFile, setExcelFile] = useState(null);
+  const [mappingFile, setMappingFile] = useState(null);
 
   const handleJsonChange = (e) => {
     const file = e.target.files[0];
-    if (file && file.type === 'application/json') {
+    if (file && (file.type === 'application/json' || file.name.endsWith('.json'))) {
       setJsonFile(file);
     } else {
       onError('Please select a valid JSON file');
     }
   };
 
-  const handleExcelChange = (e) => {
+  const handleMappingFileChange = (e) => {
     const file = e.target.files[0];
-    if (file && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls'))) {
-      setExcelFile(file);
+    const validExts = ['.xlsx', '.xls', '.csv'];
+    const isValid = validExts.some(ext => file?.name.toLowerCase().endsWith(ext));
+    
+    if (file && isValid) {
+      setMappingFile(file);
     } else {
-      onError('Please select a valid Excel file (.xlsx or .xls)');
+      onError('Please select a valid mapping file (.xlsx, .xls, or .csv)');
     }
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (!jsonFile || !excelFile) {
-      onError('Please upload both JSON and Excel files');
+    if (!jsonFile || !mappingFile) {
+      onError('Please upload both JSON and Mapping files');
       return;
     }
 
@@ -37,7 +40,7 @@ function FileUpload({ onSuccess, onError, onLoading, onReset }) {
 
     const formData = new FormData();
     formData.append('jsonFile', jsonFile);
-    formData.append('excelFile', excelFile);
+    formData.append('excelFile', mappingFile);
 
     try {
       const response = await axios.post('/api/upload/process', formData, {
@@ -55,10 +58,10 @@ function FileUpload({ onSuccess, onError, onLoading, onReset }) {
 
   const handleReset = () => {
     setJsonFile(null);
-    setExcelFile(null);
+    setMappingFile(null);
     onReset();
     document.getElementById('jsonFileInput').value = '';
-    document.getElementById('excelFileInput').value = '';
+    document.getElementById('mappingFileInput').value = '';
   };
 
   return (
@@ -67,8 +70,9 @@ function FileUpload({ onSuccess, onError, onLoading, onReset }) {
         <div className="file-input-group">
           <div className="file-input-wrapper">
             <label htmlFor="jsonFileInput" className="file-label">
-              📄 JSON File
+              📄 JSON File (Reference Only)
             </label>
+            <p className="file-hint">Sample JSON for API structure reference</p>
             <input
               id="jsonFileInput"
               type="file"
@@ -82,18 +86,19 @@ function FileUpload({ onSuccess, onError, onLoading, onReset }) {
           </div>
 
           <div className="file-input-wrapper">
-            <label htmlFor="excelFileInput" className="file-label">
-              📊 Excel File
+            <label htmlFor="mappingFileInput" className="file-label">
+              📊 Mapping Sheet (Source of Truth)
             </label>
+            <p className="file-hint">Excel/CSV with ALL fields from any insurer (BAJAJ, Kotak, IPRU, etc.)</p>
             <input
-              id="excelFileInput"
+              id="mappingFileInput"
               type="file"
-              accept=".xlsx,.xls"
-              onChange={handleExcelChange}
+              accept=".xlsx,.xls,.csv"
+              onChange={handleMappingFileChange}
               className="file-input"
             />
-            {excelFile && (
-              <span className="file-name">✓ {excelFile.name}</span>
+            {mappingFile && (
+              <span className="file-name">✓ {mappingFile.name}</span>
             )}
           </div>
         </div>
@@ -102,9 +107,9 @@ function FileUpload({ onSuccess, onError, onLoading, onReset }) {
           <button 
             type="submit" 
             className="submit-btn"
-            disabled={!jsonFile || !excelFile}
+            disabled={!jsonFile || !mappingFile}
           >
-            Generate Input Fields
+            🚀 Generate Configurations
           </button>
           <button 
             type="button" 

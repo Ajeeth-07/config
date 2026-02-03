@@ -1,9 +1,11 @@
-const express = require('express');
-const cors = require('cors');
-const dotenv = require('dotenv');
-const uploadRoutes = require('./routes/upload');
+const express = require("express");
+const cors = require("cors");
+const dotenv = require("dotenv");
 
+// Load .env BEFORE importing routes that use env variables
 dotenv.config();
+
+const uploadRoutes = require("./routes/upload");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -14,11 +16,11 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
-app.use('/api/upload', uploadRoutes);
+app.use("/api/upload", uploadRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', message: 'AI Input Generator API is running' });
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok", message: "AI Input Generator API is running" });
 });
 
 app.listen(PORT, () => {

@@ -38,6 +38,12 @@ function FieldDisplay({ data }) {
       <div className="success-banner">
         <h2>✅ Input Configurations Generated Successfully!</h2>
         <p>{data.configCount} input configurations created</p>
+        {data.sheetsAnalyzed && (
+          <p className="sheets-info">
+            📑 Analyzed {data.sheetsAnalyzed.length} sheet(s): {data.sheetsAnalyzed.join(', ')} 
+            {data.fileType && <span className="file-type-badge">{data.fileType.toUpperCase()}</span>}
+          </p>
+        )}
         <button className="download-btn" onClick={handleDownload} disabled={downloading}>
           {downloading ? '⏳ Downloading...' : '📥 Download Excel File'}
         </button>
@@ -60,7 +66,7 @@ function FieldDisplay({ data }) {
           className={`tab ${activeTab === 'metadata' ? 'active' : ''}`}
           onClick={() => setActiveTab('metadata')}
         >
-          Excel Metadata
+          Mapping Sheet Data
         </button>
       </div>
 
@@ -116,19 +122,20 @@ function FieldDisplay({ data }) {
 
         {activeTab === 'metadata' && (
           <div className="metadata-view">
-            <h3>📊 Excel Metadata</h3>
-            {data.excelMetadata && data.excelMetadata.length > 0 ? (
+            <h3>📊 Original Mapping Sheet Data</h3>
+            <p className="hint">This is the raw data from the uploaded insurer mapping file</p>
+            {data.mappingData && data.mappingData.length > 0 ? (
               <div className="table-wrapper">
                 <table className="metadata-table">
                   <thead>
                     <tr>
-                      {Object.keys(data.excelMetadata[0]).map((key, idx) => (
+                      {Object.keys(data.mappingData[0]).map((key, idx) => (
                         <th key={idx}>{key}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody>
-                    {data.excelMetadata.map((row, idx) => (
+                    {data.mappingData.map((row, idx) => (
                       <tr key={idx}>
                         {Object.values(row).map((value, vIdx) => (
                           <td key={vIdx}>{String(value)}</td>
@@ -139,7 +146,7 @@ function FieldDisplay({ data }) {
                 </table>
               </div>
             ) : (
-              <p>No metadata available</p>
+              <p>No mapping data available</p>
             )}
           </div>
         )}

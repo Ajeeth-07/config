@@ -23,17 +23,20 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /json|xlsx|xls/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype) || 
-                     file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-                     file.mimetype === 'application/vnd.ms-excel' ||
-                     file.mimetype === 'application/json';
+    const ext = path.extname(file.originalname).toLowerCase();
+    const allowedExts = ['.json', '.xlsx', '.xls', '.csv'];
+    const allowedMimes = [
+      'application/json',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'application/vnd.ms-excel',
+      'text/csv',
+      'application/csv'
+    ];
     
-    if (extname || mimetype) {
+    if (allowedExts.includes(ext) || allowedMimes.includes(file.mimetype)) {
       return cb(null, true);
     } else {
-      cb(new Error('Only JSON and Excel files are allowed!'));
+      cb(new Error('Only JSON, Excel (.xlsx, .xls), and CSV files are allowed!'));
     }
   }
 });

@@ -30,7 +30,7 @@ function App() {
       <div className="container">
         <header className="header">
           <h1>AI Input Configuration Generator</h1>
-          <p>Upload JSON and Excel files to generate input configurations with unique identifiers, data types & regex patterns</p>
+          <p>Upload mapping sheet (Excel/CSV) from any insurer to generate standardized input configurations</p>
         </header>
 
         <FileUpload 
