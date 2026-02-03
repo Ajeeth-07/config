@@ -1,10 +1,199 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleAICacheManager } = require("@google/generative-ai/server");
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
 
 // Load API key from environment variable
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const cacheManager = new GoogleAICacheManager(process.env.GEMINI_API_KEY);
+
+// Configuration for rate limiting and retries
+// Gemini 3 Limits: 5 req/min, 1M input tokens, 65k output tokens, 20 req/day (free)
+const CONFIG = {
+  MODEL: "gemini-3-pro-preview",
+  CACHE_MODEL: "gemini-3-pro-preview",
+  BATCH_SIZE: 100, // 100 rows per batch (each row = one input field)
+  DELAY_BETWEEN_BATCHES_MS: 3000, // 3 seconds between batches
+  MAX_RETRIES: 3,
+  INITIAL_RETRY_DELAY_MS: 5000,
+  ENABLE_CACHING: true,
+  CACHE_TTL_SECONDS: 3600,
+};
+
+// In-memory cache for current session
+let currentCache = null;
+
+/**
+ * System instructions for input configuration generation
+ */
+const SYSTEM_INSTRUCTIONS = `You are an expert AI assistant for insurance API integration.
+Your task is to analyze mapping sheets and generate standardized input configurations.
+
+## OUTPUT FORMAT:
+Return ONLY a valid JSON array with these EXACT fields:
+[{
+  "uniqueIdentifier": "FIELD_NAME_UPPERCASE_NO_SPACES",
+  "fieldPath": "path.to.field",
+  "label": "Human Readable Label",
+  "dataType": "STRING|NUMBER|DATE|BOOLEAN|LIST|EMAIL|PHONE|ALPHANUMERIC",
+  "required": "YES|NO",
+  "regex": "pattern or empty string",
+  "listValues": "comma,separated,values or empty string",
+  "sampleValue": "example value",
+  "validation": "validation rules",
+  "mappedFrom": "original column name",
+  "sourceSheet": "sheet name"
+}]
+
+## RULES:
+1. Generate ONE configuration per column
+2. uniqueIdentifier: UPPERCASE, underscores, no spaces (e.g., INSURED_DOB, PROPOSER_EMAIL)
+3. Apply appropriate regex patterns:
+   - EMAIL: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$
+   - PHONE: ^[0-9]{10}$
+   - DATE (DD/MM/YYYY): ^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[012])/\\d{4}$
+   - PAN: ^[A-Z]{5}[0-9]{4}[A-Z]{1}$
+   - AADHAAR: ^[2-9]{1}[0-9]{11}$
+   - PINCODE: ^[1-9][0-9]{5}$
+4. For LIST type, include all dropdown values in listValues
+5. Return ONLY JSON array, no markdown, no explanation`;
+
+/**
+ * Create or retrieve cached content
+ */
+async function getOrCreateCache(jsonRef, structuralFingerprint) {
+  if (!CONFIG.ENABLE_CACHING) {
+    return null;
+  }
+
+  try {
+    // Create cache content with system instructions and JSON reference
+    const cacheContent = `${SYSTEM_INSTRUCTIONS}
+
+## JSON API Reference (for field path mapping):
+${JSON.stringify(jsonRef, null, 2)}
+
+## Structural Overview:
+${JSON.stringify(
+  Object.entries(structuralFingerprint).map(([sheet, fp]) => ({
+    sheet,
+    columnCount: fp.columns.length,
+    clusters: Object.entries(fp.clusters)
+      .filter(([_, cols]) => cols.length > 0)
+      .map(([name, cols]) => `${name}: ${cols.length}`),
+  })),
+  null,
+  2,
+)}`;
+
+    console.log("  📦 Creating context cache...");
+
+    const cache = await cacheManager.create({
+      model: CONFIG.CACHE_MODEL,
+      displayName: `input-config-cache-${Date.now()}`,
+      systemInstruction: SYSTEM_INSTRUCTIONS,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: `JSON Reference:\n${JSON.stringify(jsonRef, null, 2)}` },
+          ],
+        },
+      ],
+      ttlSeconds: CONFIG.CACHE_TTL_SECONDS,
+    });
+
+    console.log(
+      `  ✅ Cache created: ${cache.name} (TTL: ${CONFIG.CACHE_TTL_SECONDS}s)`,
+    );
+    currentCache = cache;
+    return cache;
+  } catch (error) {
+    console.log(`  ⚠️  Caching not available: ${error.message}`);
+    console.log("  📝 Falling back to non-cached mode");
+    return null;
+  }
+}
+
+/**
+ * Get model - either from cache or regular
+ */
+async function getModel(cache = null) {
+  if (cache && CONFIG.ENABLE_CACHING) {
+    try {
+      return genAI.getGenerativeModelFromCachedContent(cache);
+    } catch (error) {
+      console.log(`  ⚠️  Could not use cache: ${error.message}`);
+    }
+  }
+  return genAI.getGenerativeModel({ model: CONFIG.MODEL });
+}
+
+/**
+ * Clean up cache when done
+ */
+async function cleanupCache() {
+  if (currentCache) {
+    try {
+      await cacheManager.delete(currentCache.name);
+      console.log("  🗑️  Cache cleaned up");
+      currentCache = null;
+    } catch (error) {
+      // Ignore cleanup errors
+    }
+  }
+}
+
+/**
+ * Sleep utility
+ */
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Retry with exponential backoff
+ */
+async function retryWithBackoff(
+  fn,
+  maxRetries = CONFIG.MAX_RETRIES,
+  initialDelay = CONFIG.INITIAL_RETRY_DELAY_MS,
+) {
+  let lastError;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error;
+
+      // Check if it's a quota/rate limit error
+      const isRateLimitError =
+        error.message?.includes("429") ||
+        error.message?.includes("quota") ||
+        error.message?.includes("Too Many Requests");
+
+      if (isRateLimitError && attempt < maxRetries) {
+        // Extract retry delay from error if available
+        const retryMatch = error.message?.match(/retry in (\d+\.?\d*)s/i);
+        let waitTime = retryMatch
+          ? parseFloat(retryMatch[1]) * 1000
+          : initialDelay * Math.pow(2, attempt);
+
+        console.log(
+          `    ⏳ Rate limited. Waiting ${(waitTime / 1000).toFixed(
+            1,
+          )}s before retry ${attempt + 1}/${maxRetries}...`,
+        );
+        await sleep(waitTime);
+      } else if (!isRateLimitError) {
+        // Non-rate-limit error, don't retry
+        throw error;
+      }
+    }
+  }
+
+  throw lastError;
+}
 
 /**
  * Validates and reads JSON file
@@ -315,58 +504,101 @@ function generateStructuralSummary(fingerprint, sheetName) {
 }
 
 /**
- * STAGE B: Process columns in batches
+ * STAGE B: Process ROWS in batches (each ROW is an input field)
+ * This is the correct approach - rows are input fields, columns are metadata
  */
-async function processColumnBatch(
+async function processRowBatch(
   model,
-  batchColumns,
-  metadata,
+  batchRows,
   sheetName,
   jsonRef,
+  columnHeaders,
 ) {
-  const batchMeta = metadata.filter((m) => batchColumns.includes(m.columnName));
+  // Convert rows to markdown table for better LLM understanding
+  let rowsTable = "| " + columnHeaders.join(" | ") + " |\n";
+  rowsTable += "| " + columnHeaders.map(() => "---").join(" | ") + " |\n";
 
-  let metaTable =
-    "| Column | DataType | Dropdown Values |\n| --- | --- | --- |\n";
-  batchMeta.forEach((m) => {
-    const vals = m.isDropdown ? m.listValues.join(", ") : "-";
-    metaTable += `| ${m.columnName} | ${m.dataType} | ${vals} |\n`;
+  batchRows.forEach((row) => {
+    const values = columnHeaders.map((col) => {
+      const val = row[col];
+      return val !== undefined && val !== null
+        ? String(val).substring(0, 100)
+        : "";
+    });
+    rowsTable += "| " + values.join(" | ") + " |\n";
   });
 
-  const prompt = `Generate input configurations for these ${
-    batchColumns.length
-  } fields from sheet "${sheetName}".
+  const prompt = `Analyze these ${
+    batchRows.length
+  } input field definitions from sheet "${sheetName}" and generate standardized configurations.
 
-## Column Metadata:
-${metaTable}
+## INPUT FIELD DEFINITIONS (each row = one input field):
+${rowsTable}
 
-## JSON API Reference (for field path mapping):
+## Column Headers Explanation:
+The columns in the table above represent metadata about each input field. Common patterns:
+- Field name columns: "Field", "FieldName", "Parameter", "API Key", "InputName"
+- Data type columns: "Type", "DataType", "Format"
+- Required columns: "Required", "Mandatory", "M/O"
+- Validation columns: "Validation", "Regex", "Pattern"
+- List/Dropdown columns: "Values", "Options", "ListValues", "Master"
+- Description columns: "Description", "Label"
+
+## JSON API Reference:
 ${JSON.stringify(jsonRef, null, 2)}
 
-## Rules:
-1. Generate ONE configuration per column
-2. uniqueIdentifier: UPPERCASE, no spaces (e.g., INSURED_DOB, PROPOSER_EMAIL)
-3. Use detected dataType, apply appropriate regex
-4. Standard regex: EMAIL=^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$, PHONE=^[0-9]{10}$, DATE=^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[012])/\\d{4}$, PAN=^[A-Z]{5}[0-9]{4}[A-Z]{1}$
-5. listValues: Include dropdown values if applicable
+## TASK:
+For EACH ROW in the table above, generate ONE configuration object.
+Total expected outputs: ${batchRows.length} configurations.
 
-Return ONLY a JSON array:
-[{"uniqueIdentifier":"","fieldPath":"","label":"","dataType":"","required":"YES/NO","regex":"","listValues":"","sampleValue":"","validation":"","mappedFrom":"","sourceSheet":"${sheetName}"}]`;
+## OUTPUT RULES:
+1. uniqueIdentifier: UPPERCASE, underscores, no spaces (derive from field name)
+2. fieldPath: The API path/key for this field
+3. dataType: STRING|NUMBER|DATE|BOOLEAN|LIST|EMAIL|PHONE|ALPHANUMERIC
+4. Apply regex patterns:
+   - EMAIL: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$
+   - PHONE: ^[0-9]{10}$
+   - DATE: ^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[012])/\\d{4}$
+   - PAN: ^[A-Z]{5}[0-9]{4}[A-Z]{1}$
+5. listValues: Extract from dropdown/options columns if present
 
-  const result = await model.generateContent(prompt);
-  let text = result.response.text();
-  text = text
-    .replace(/```json\n?/g, "")
-    .replace(/```\n?/g, "")
-    .trim();
+Return ONLY a JSON array with ${batchRows.length} objects:
+[{"uniqueIdentifier":"","fieldPath":"","label":"","dataType":"","required":"YES/NO","regex":"","listValues":"","sampleValue":"","validation":"","mappedFrom":"original field name from row","sourceSheet":"${sheetName}"}]`;
 
-  return JSON.parse(text);
+  // Use retry with backoff for API calls
+  return await retryWithBackoff(async () => {
+    const result = await model.generateContent(prompt);
+    const response = result.response;
+
+    // Extract token usage from response
+    const usageMetadata = response.usageMetadata || {};
+    const tokenUsage = {
+      promptTokens: usageMetadata.promptTokenCount || 0,
+      completionTokens: usageMetadata.candidatesTokenCount || 0,
+      totalTokens: usageMetadata.totalTokenCount || 0,
+    };
+
+    let text = response.text();
+    text = text
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
+
+    const configs = JSON.parse(text);
+
+    return {
+      configs,
+      tokenUsage,
+    };
+  });
 }
 
 /**
- * Main function: Two-Stage Semantic Compression
+ * Main function: Two-Stage Semantic Compression with Token Tracking
  */
 async function processFiles(jsonFilePath, mappingFilePath) {
+  const startTime = Date.now();
+
   // Step 1: Read and validate files
   const jsonResult = readJsonFile(jsonFilePath);
   if (!jsonResult.valid) {
@@ -379,51 +611,129 @@ async function processFiles(jsonFilePath, mappingFilePath) {
   }
 
   const flattenedJson = flattenJson(jsonResult.data);
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+  // Try to create cache for better performance
+  const cache = await getOrCreateCache(
+    flattenedJson,
+    mappingResult.structuralFingerprint,
+  );
+  const model = await getModel(cache);
+
+  // Calculate total ROWS (input fields) and estimated requests
+  // Each ROW in the Excel is an input field, NOT columns!
+  const totalRows = Object.values(mappingResult.allSheetsData).reduce(
+    (acc, sheetData) => acc + sheetData.length,
+    0,
+  );
+  const estimatedBatches = Math.ceil(totalRows / CONFIG.BATCH_SIZE);
+  const estimatedTime =
+    (estimatedBatches * CONFIG.DELAY_BETWEEN_BATCHES_MS) / 1000;
+
+  console.log(`\n📊 Processing Summary:`);
+  console.log(`   Model: ${CONFIG.MODEL}`);
+  console.log(`   Total input fields (rows): ${totalRows}`);
+  console.log(`   Batch size: ${CONFIG.BATCH_SIZE} rows per request`);
+  console.log(`   Estimated batches/requests: ${estimatedBatches}`);
+  console.log(
+    `   Estimated processing time: ~${Math.ceil(estimatedTime / 60)} minutes`,
+  );
+  console.log(
+    `   Delay between batches: ${CONFIG.DELAY_BETWEEN_BATCHES_MS / 1000}s`,
+  );
+
+  // Warning if exceeding free tier limits
+  if (estimatedBatches > 20) {
+    console.log(
+      `\n⚠️  WARNING: This will require ~${estimatedBatches} API requests.`,
+    );
+    console.log(`   Gemini 3 Free Tier limit: 20 requests/day`);
+    console.log(`   Consider increasing BATCH_SIZE or using paid tier.\n`);
+  }
 
   let allConfigs = [];
-  const BATCH_SIZE = 20; // Process 20 columns at a time
+  const BATCH_SIZE = CONFIG.BATCH_SIZE;
 
-  // Process each sheet
+  // Token usage tracking
+  let totalTokenUsage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+    batchBreakdown: [],
+  };
+
+  // Process each sheet - ROWS are input fields
   for (const sheetName of mappingResult.sheetNames) {
+    const sheetData = mappingResult.allSheetsData[sheetName];
     const fingerprint = mappingResult.structuralFingerprint[sheetName];
-    const columns = fingerprint.columns;
-    const metadata = fingerprint.columnMetadata;
+    const columnHeaders = fingerprint.columns;
+    const rowCount = sheetData.length;
 
-    console.log(`Processing sheet "${sheetName}": ${columns.length} columns`);
-
-    // STAGE A: Send structural summary first for context
-    const structuralSummary = generateStructuralSummary(
-      mappingResult.structuralFingerprint,
-      sheetName,
+    console.log(
+      `Processing sheet "${sheetName}": ${rowCount} input fields (rows)`,
     );
 
-    // STAGE B: Process in batches
-    for (let i = 0; i < columns.length; i += BATCH_SIZE) {
-      const batchColumns = columns.slice(i, i + BATCH_SIZE);
+    // Process ROWS in batches (each row = one input field)
+    for (let i = 0; i < rowCount; i += BATCH_SIZE) {
+      const batchRows = sheetData.slice(i, i + BATCH_SIZE);
+      const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       console.log(
-        `  Batch ${Math.floor(i / BATCH_SIZE) + 1}: columns ${i + 1}-${Math.min(
+        `  Batch ${batchNumber}: rows ${i + 1}-${Math.min(
           i + BATCH_SIZE,
-          columns.length,
-        )}`,
+          rowCount,
+        )} (${batchRows.length} input fields)`,
       );
 
       try {
-        const batchConfigs = await processColumnBatch(
+        const batchResult = await processRowBatch(
           model,
-          batchColumns,
-          metadata,
+          batchRows,
           sheetName,
           flattenedJson,
+          columnHeaders,
         );
-        allConfigs = allConfigs.concat(batchConfigs);
+
+        // Add configs
+        allConfigs = allConfigs.concat(batchResult.configs);
+
+        // Accumulate token usage
+        totalTokenUsage.promptTokens += batchResult.tokenUsage.promptTokens;
+        totalTokenUsage.completionTokens +=
+          batchResult.tokenUsage.completionTokens;
+        totalTokenUsage.totalTokens += batchResult.tokenUsage.totalTokens;
+
+        // Track per-batch usage
+        totalTokenUsage.batchBreakdown.push({
+          batch: batchNumber,
+          sheet: sheetName,
+          columns: batchColumns.length,
+          ...batchResult.tokenUsage,
+        });
+
+        console.log(
+          `    Tokens: ${batchResult.tokenUsage.totalTokens} (prompt: ${batchResult.tokenUsage.promptTokens}, completion: ${batchResult.tokenUsage.completionTokens})`,
+        );
       } catch (error) {
-        console.error(`  Batch error: ${error.message}`);
+        console.error(`  ❌ Batch error: ${error.message}`);
+
+        // Check if it's a quota exhausted error (daily limit)
+        if (
+          error.message?.includes("quota") &&
+          error.message?.includes("limit: 0")
+        ) {
+          console.error(
+            `  ⚠️  Daily quota exhausted. Please wait or upgrade your plan.`,
+          );
+        }
         // Continue with next batch
       }
 
-      // Small delay to avoid rate limiting
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // Delay between batches to respect rate limits
+      console.log(
+        `    ⏸️  Waiting ${
+          CONFIG.DELAY_BETWEEN_BATCHES_MS / 1000
+        }s before next batch...`,
+      );
+      await sleep(CONFIG.DELAY_BETWEEN_BATCHES_MS);
     }
   }
 
@@ -451,26 +761,30 @@ async function processFiles(jsonFilePath, mappingFilePath) {
 
   generateExcelFile(uniqueConfigs, outputPath);
 
+  // Cleanup cache after processing
+  await cleanupCache();
+
+  const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
+
   // Prepare summary stats
   const stats = {
     totalSheets: mappingResult.sheetNames.length,
     sheetsProcessed: mappingResult.sheetNames,
-    totalColumnsProcessed: Object.values(
-      mappingResult.structuralFingerprint,
-    ).reduce((acc, fp) => acc + fp.columns.length, 0),
+    totalInputFieldsProcessed: Object.values(
+      mappingResult.allSheetsData,
+    ).reduce((acc, sheetData) => acc + sheetData.length, 0),
     configurationsGenerated: uniqueConfigs.length,
-    batchesProcessed: Math.ceil(
-      Object.values(mappingResult.structuralFingerprint).reduce(
-        (acc, fp) => acc + fp.columns.length,
-        0,
-      ) / BATCH_SIZE,
-    ),
+    batchesProcessed: totalTokenUsage.batchBreakdown.length,
+    processingTimeSeconds: parseFloat(processingTime),
+    cachingEnabled: CONFIG.ENABLE_CACHING,
+    cacheUsed: cache !== null,
   };
 
   return {
     success: true,
     message:
-      "Input configurations generated successfully using Two-Stage Semantic Compression",
+      "Input configurations generated successfully using Two-Stage Semantic Compression" +
+      (cache ? " with Context Caching" : ""),
     outputFile: outputFileName,
     outputPath,
     generatedConfigs: uniqueConfigs,
@@ -481,7 +795,14 @@ async function processFiles(jsonFilePath, mappingFilePath) {
     sheetsAnalyzed: mappingResult.sheetNames,
     fileType: mappingResult.fileType,
     stats,
+    tokenUsage: totalTokenUsage,
     structuralFingerprint: mappingResult.structuralFingerprint,
+    modelInfo: {
+      model: CONFIG.MODEL,
+      batchSize: CONFIG.BATCH_SIZE,
+      delayBetweenBatches: CONFIG.DELAY_BETWEEN_BATCHES_MS,
+      maxRetries: CONFIG.MAX_RETRIES,
+    },
   };
 }
 
@@ -494,4 +815,7 @@ module.exports = {
   extractColumnMetadata,
   clusterColumns,
   toMarkdownTable,
+  getOrCreateCache,
+  cleanupCache,
+  CONFIG,
 };
