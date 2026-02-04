@@ -1,105 +1,120 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const { processFiles } = require('../services/aiAgent');
+const express = require("express");
+const multer = require("multer");
+const path = require("path");
+const fs = require("fs");
+const { processFiles } = require("../services");
 
 const router = express.Router();
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = 'uploads/';
+    const uploadDir = "uploads/";
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
+    cb(null, Date.now() + "-" + file.originalname);
+  },
 });
 
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
-    const allowedExts = ['.json', '.xlsx', '.xls', '.csv'];
+    const allowedExts = [".json", ".xlsx", ".xls", ".csv"];
     const allowedMimes = [
-      'application/json',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-excel',
-      'text/csv',
-      'application/csv'
+      "application/json",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "application/vnd.ms-excel",
+      "text/csv",
+      "application/csv",
     ];
-    
+
     if (allowedExts.includes(ext) || allowedMimes.includes(file.mimetype)) {
       return cb(null, true);
     } else {
-      cb(new Error('Only JSON, Excel (.xlsx, .xls), and CSV files are allowed!'));
+      cb(
+        new Error("Only JSON, Excel (.xlsx, .xls), and CSV files are allowed!"),
+      );
     }
-  }
+  },
 });
 
 // Upload and process files - returns Excel file
-router.post('/process', upload.fields([
-  { name: 'jsonFile', maxCount: 1 },
-  { name: 'excelFile', maxCount: 1 }
-]), async (req, res) => {
-  try {
-    if (!req.files.jsonFile || !req.files.excelFile) {
-      return res.status(400).json({ 
-        error: 'Both JSON and Excel files are required' 
+router.post(
+  "/process",
+  upload.fields([
+    { name: "jsonFile", maxCount: 1 },
+    { name: "excelFile", maxCount: 1 },
+  ]),
+  async (req, res) => {
+    try {
+      if (!req.files.jsonFile || !req.files.excelFile) {
+        return res.status(400).json({
+          error: "Both JSON and Excel files are required",
+        });
+      }
+
+      const jsonFilePath = req.files.jsonFile[0].path;
+      const excelFilePath = req.files.excelFile[0].path;
+
+      // Process files with AI agent
+      const result = await processFiles(jsonFilePath, excelFilePath);
+
+      // Clean up uploaded files
+      fs.unlinkSync(jsonFilePath);
+      fs.unlinkSync(excelFilePath);
+
+      res.json(result);
+    } catch (error) {
+      console.error("Error processing files:", error);
+
+      // Clean up files on error
+      if (req.files && req.files.jsonFile) {
+        try {
+          fs.unlinkSync(req.files.jsonFile[0].path);
+        } catch (e) {}
+      }
+      if (req.files && req.files.excelFile) {
+        try {
+          fs.unlinkSync(req.files.excelFile[0].path);
+        } catch (e) {}
+      }
+
+      res.status(500).json({
+        error: error.message || "Failed to process files",
       });
     }
-
-    const jsonFilePath = req.files.jsonFile[0].path;
-    const excelFilePath = req.files.excelFile[0].path;
-
-    // Process files with AI agent
-    const result = await processFiles(jsonFilePath, excelFilePath);
-
-    // Clean up uploaded files
-    fs.unlinkSync(jsonFilePath);
-    fs.unlinkSync(excelFilePath);
-
-    res.json(result);
-  } catch (error) {
-    console.error('Error processing files:', error);
-    
-    // Clean up files on error
-    if (req.files && req.files.jsonFile) {
-      try { fs.unlinkSync(req.files.jsonFile[0].path); } catch (e) {}
-    }
-    if (req.files && req.files.excelFile) {
-      try { fs.unlinkSync(req.files.excelFile[0].path); } catch (e) {}
-    }
-    
-    res.status(500).json({ 
-      error: error.message || 'Failed to process files' 
-    });
-  }
-});
+  },
+);
 
 // Download generated Excel file
-router.get('/download/:filename', (req, res) => {
+router.get("/download/:filename", (req, res) => {
   const filename = req.params.filename;
-  const filePath = path.join(__dirname, '..', 'outputs', filename);
-  
+  const filePath = path.join(__dirname, "..", "outputs", filename);
+
   if (!fs.existsSync(filePath)) {
-    return res.status(404).json({ error: 'File not found' });
+    return res.status(404).json({ error: "File not found" });
   }
-  
-  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  
+
+  res.setHeader(
+    "Content-Type",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  );
+  res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
   const fileStream = fs.createReadStream(filePath);
   fileStream.pipe(res);
-  
+
   // Clean up file after download (optional - you can remove this if you want to keep files)
-  fileStream.on('end', () => {
+  fileStream.on("end", () => {
     setTimeout(() => {
-      try { fs.unlinkSync(filePath); } catch (e) {}
+      try {
+        fs.unlinkSync(filePath);
+      } catch (e) {}
     }, 5000);
   });
 });
