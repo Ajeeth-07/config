@@ -1,120 +1,79 @@
-import React, { useState } from 'react';
-import axios from 'axios';
-import './FileUpload.css';
+import React, { useState } from "react";
+import "./FileUpload.css";
 
-function FileUpload({ onSuccess, onError, onLoading, onReset }) {
+function FileUpload({ onSubmit, disabled }) {
   const [jsonFile, setJsonFile] = useState(null);
   const [mappingFile, setMappingFile] = useState(null);
 
   const handleJsonChange = (e) => {
     const file = e.target.files[0];
-    if (file && (file.type === 'application/json' || file.name.endsWith('.json'))) {
-      setJsonFile(file);
-    } else {
-      onError('Please select a valid JSON file');
-    }
+    if (file) setJsonFile(file);
   };
 
-  const handleMappingFileChange = (e) => {
+  const handleMappingChange = (e) => {
     const file = e.target.files[0];
-    const validExts = ['.xlsx', '.xls', '.csv'];
-    const isValid = validExts.some(ext => file?.name.toLowerCase().endsWith(ext));
-    
-    if (file && isValid) {
-      setMappingFile(file);
-    } else {
-      onError('Please select a valid mapping file (.xlsx, .xls, or .csv)');
-    }
+    if (file) setMappingFile(file);
   };
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
-
-    if (!jsonFile || !mappingFile) {
-      onError('Please upload both JSON and Mapping files');
-      return;
-    }
-
-    onLoading(true);
-    onReset();
-
-    const formData = new FormData();
-    formData.append('jsonFile', jsonFile);
-    formData.append('excelFile', mappingFile);
-
-    try {
-      const response = await axios.post('/api/upload/process', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-
-      onSuccess(response.data);
-    } catch (error) {
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to process files';
-      onError(errorMsg);
+    if (jsonFile && mappingFile) {
+      onSubmit(jsonFile, mappingFile);
     }
   };
 
   const handleReset = () => {
     setJsonFile(null);
     setMappingFile(null);
-    onReset();
-    document.getElementById('jsonFileInput').value = '';
-    document.getElementById('mappingFileInput').value = '';
+    document.getElementById("jsonInput").value = "";
+    document.getElementById("mappingInput").value = "";
   };
 
   return (
-    <div className="file-upload-container">
-      <form onSubmit={handleSubmit} className="upload-form">
-        <div className="file-input-group">
-          <div className="file-input-wrapper">
-            <label htmlFor="jsonFileInput" className="file-label">
-              📄 JSON File (Reference Only)
-            </label>
-            <p className="file-hint">Sample JSON for API structure reference</p>
+    <div className="upload-box">
+      <h2>File Upload</h2>
+      <form onSubmit={handleSubmit}>
+        <div className="file-row">
+          <div className="file-group">
+            <label>JSON File (API Reference):</label>
             <input
-              id="jsonFileInput"
+              id="jsonInput"
               type="file"
               accept=".json"
               onChange={handleJsonChange}
-              className="file-input"
+              disabled={disabled}
             />
             {jsonFile && (
-              <span className="file-name">✓ {jsonFile.name}</span>
+              <div className="file-selected">Selected: {jsonFile.name}</div>
             )}
           </div>
-
-          <div className="file-input-wrapper">
-            <label htmlFor="mappingFileInput" className="file-label">
-              📊 Mapping Sheet (Source of Truth)
-            </label>
-            <p className="file-hint">Excel/CSV with ALL fields from any insurer (BAJAJ, Kotak, IPRU, etc.)</p>
+          <div className="file-group">
+            <label>Mapping Sheet (Excel/CSV):</label>
             <input
-              id="mappingFileInput"
+              id="mappingInput"
               type="file"
               accept=".xlsx,.xls,.csv"
-              onChange={handleMappingFileChange}
-              className="file-input"
+              onChange={handleMappingChange}
+              disabled={disabled}
             />
             {mappingFile && (
-              <span className="file-name">✓ {mappingFile.name}</span>
+              <div className="file-selected">Selected: {mappingFile.name}</div>
             )}
           </div>
         </div>
-
-        <div className="button-group">
-          <button 
-            type="submit" 
-            className="submit-btn"
-            disabled={!jsonFile || !mappingFile}
+        <div className="btn-row">
+          <button
+            type="submit"
+            className="btn btn-primary"
+            disabled={!jsonFile || !mappingFile || disabled}
           >
-            🚀 Generate Configurations
+            {disabled ? "Processing..." : "Generate Configs"}
           </button>
-          <button 
-            type="button" 
+          <button
+            type="button"
+            className="btn"
             onClick={handleReset}
-            className="reset-btn"
+            disabled={disabled}
           >
             Reset
           </button>

@@ -2,9 +2,11 @@ const express = require("express");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const { processFiles } = require("../services");
 
 const router = express.Router();
+
+// Store for SSE clients
+const progressClients = new Map();
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -43,7 +45,58 @@ const upload = multer({
   },
 });
 
-// Upload and process files - returns Excel file
+// SSE endpoint for progress updates
+router.get("/progress/:sessionId", (req, res) => {
+  const sessionId = req.params.sessionId;
+
+  // Critical headers for SSE to work properly
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no"); // Disable nginx buffering
+  res.setHeader("Access-Control-Allow-Origin", "*");
+
+  // Flush headers immediately
+  res.flushHeaders();
+
+  // Send initial connection message
+  res.write(
+    `data: ${JSON.stringify({
+      type: "connected",
+      message: "Connected to progress stream",
+    })}\n\n`,
+  );
+
+  // Store the response object for this session
+  progressClients.set(sessionId, res);
+
+  // Keep connection alive with heartbeat
+  const heartbeat = setInterval(() => {
+    res.write(": heartbeat\n\n");
+  }, 15000);
+
+  // Clean up on close
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    progressClients.delete(sessionId);
+  });
+});
+
+// Helper to send progress update
+function sendProgress(sessionId, message, type = "log") {
+  const client = progressClients.get(sessionId);
+  if (client) {
+    const timestamp = new Date().toLocaleTimeString("en-US", { hour12: false });
+    try {
+      client.write(`data: ${JSON.stringify({ type, message, timestamp })}\n\n`);
+    } catch (e) {
+      // Client disconnected
+      progressClients.delete(sessionId);
+    }
+  }
+}
+
+// Upload and process files with progress streaming
 router.post(
   "/process",
   upload.fields([
@@ -51,6 +104,8 @@ router.post(
     { name: "excelFile", maxCount: 1 },
   ]),
   async (req, res) => {
+    const sessionId = req.body.sessionId || Date.now().toString();
+
     try {
       if (!req.files.jsonFile || !req.files.excelFile) {
         return res.status(400).json({
@@ -61,16 +116,27 @@ router.post(
       const jsonFilePath = req.files.jsonFile[0].path;
       const excelFilePath = req.files.excelFile[0].path;
 
-      // Process files with AI agent
-      const result = await processFiles(jsonFilePath, excelFilePath);
+      // Import processFiles with progress callback
+      const { processFilesWithProgress } = require("../services");
+
+      // Process files with progress updates
+      const result = await processFilesWithProgress(
+        jsonFilePath,
+        excelFilePath,
+        (message, type) => sendProgress(sessionId, message, type),
+      );
 
       // Clean up uploaded files
       fs.unlinkSync(jsonFilePath);
       fs.unlinkSync(excelFilePath);
 
+      // Send completion message
+      sendProgress(sessionId, "Processing complete!", "complete");
+
       res.json(result);
     } catch (error) {
       console.error("Error processing files:", error);
+      sendProgress(sessionId, `ERROR: ${error.message}`, "error");
 
       // Clean up files on error
       if (req.files && req.files.jsonFile) {
@@ -109,7 +175,6 @@ router.get("/download/:filename", (req, res) => {
   const fileStream = fs.createReadStream(filePath);
   fileStream.pipe(res);
 
-  // Clean up file after download (optional - you can remove this if you want to keep files)
   fileStream.on("end", () => {
     setTimeout(() => {
       try {

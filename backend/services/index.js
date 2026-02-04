@@ -19,61 +19,74 @@ const { generateExcelFile, setupOutputDirectory } = require("./excelGenerator");
 const { processRowBatch, logProcessingSummary } = require("./aiProcessor");
 
 /**
- * Main function: Two-Stage Semantic Compression with Token Tracking
- * Processes JSON and mapping files to generate input configurations
- *
+ * Main function with progress callback for real-time updates
  * @param {string} jsonFilePath - Path to JSON API structure file
  * @param {string} mappingFilePath - Path to Excel/CSV mapping file
+ * @param {Function} onProgress - Callback for progress updates (message, type)
  * @returns {Object} Processing result with configurations and metadata
  */
-async function processFiles(jsonFilePath, mappingFilePath) {
+async function processFilesWithProgress(
+  jsonFilePath,
+  mappingFilePath,
+  onProgress = () => {},
+) {
   const startTime = Date.now();
+  const log = (msg, type = "log") => {
+    console.log(msg);
+    onProgress(msg, type);
+  };
 
   // Step 1: Read and validate files
-  console.log("\n📂 Reading input files...");
+  log("Reading input files...");
 
   const jsonResult = readJsonFile(jsonFilePath);
   if (!jsonResult.valid) {
     throw new Error(`Invalid JSON file: ${jsonResult.error}`);
   }
-  console.log("  ✅ JSON file validated");
+  log("JSON file validated successfully");
 
   const mappingResult = readMappingFile(mappingFilePath);
   if (!mappingResult.valid) {
     throw new Error(`Invalid mapping file: ${mappingResult.error}`);
   }
-  console.log(
-    `  ✅ Mapping file parsed: ${mappingResult.sheetNames.length} sheet(s)`,
-  );
+  log(`Mapping file parsed: ${mappingResult.sheetNames.length} sheet(s) found`);
+  log(`Sheets: ${mappingResult.sheetNames.join(", ")}`);
 
   const flattenedJson = flattenJson(jsonResult.data);
 
   // Step 2: Initialize caching and model
-  console.log("\n🤖 Initializing AI model...");
+  log("Initializing Gemini AI model...");
   const cache = await getOrCreateCache(
     flattenedJson,
     mappingResult.structuralFingerprint,
   );
-  const model = await getModel(cache);
 
-  // Step 3: Calculate totals and log summary
+  if (cache) {
+    log("Context cache created successfully");
+  } else {
+    log("Running in non-cached mode");
+  }
+
+  const model = await getModel(cache);
+  log(`Model initialized: ${CONFIG.MODEL}`);
+
+  // Step 3: Calculate totals
   const totalRows = Object.values(mappingResult.allSheetsData).reduce(
     (acc, sheetData) => acc + sheetData.length,
     0,
   );
+  const estimatedBatches = Math.ceil(totalRows / CONFIG.BATCH_SIZE);
 
-  logProcessingSummary({
-    model: CONFIG.MODEL,
-    totalRows,
-    batchSize: CONFIG.BATCH_SIZE,
-    delayBetweenBatches: CONFIG.DELAY_BETWEEN_BATCHES_MS,
-  });
+  log("-------------------------------------------");
+  log(`Total input fields to process: ${totalRows}`);
+  log(`Batch size: ${CONFIG.BATCH_SIZE} rows per request`);
+  log(`Estimated batches: ${estimatedBatches}`);
+  log("-------------------------------------------");
 
   // Step 4: Process each sheet in batches
   let allConfigs = [];
   const BATCH_SIZE = CONFIG.BATCH_SIZE;
 
-  // Token usage tracking
   let totalTokenUsage = {
     promptTokens: 0,
     completionTokens: 0,
@@ -81,7 +94,7 @@ async function processFiles(jsonFilePath, mappingFilePath) {
     batchBreakdown: [],
   };
 
-  console.log("\n🔄 Processing sheets...");
+  let globalBatchCount = 0;
 
   for (const sheetName of mappingResult.sheetNames) {
     const sheetData = mappingResult.allSheetsData[sheetName];
@@ -89,20 +102,19 @@ async function processFiles(jsonFilePath, mappingFilePath) {
     const columnHeaders = fingerprint.columns;
     const rowCount = sheetData.length;
 
-    console.log(
-      `\n📋 Processing sheet "${sheetName}": ${rowCount} input fields (rows)`,
-    );
+    log(`\n> Processing sheet: "${sheetName}"`);
+    log(`  Rows: ${rowCount} | Columns: ${columnHeaders.length}`);
 
-    // Process ROWS in batches (each row = one input field)
     for (let i = 0; i < rowCount; i += BATCH_SIZE) {
       const batchRows = sheetData.slice(i, i + BATCH_SIZE);
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
+      globalBatchCount++;
 
-      console.log(
-        `  📦 Batch ${batchNumber}: rows ${i + 1}-${Math.min(
+      log(
+        `  [Batch ${globalBatchCount}] Processing rows ${i + 1}-${Math.min(
           i + BATCH_SIZE,
           rowCount,
-        )} (${batchRows.length} input fields)`,
+        )}...`,
       );
 
       try {
@@ -114,47 +126,41 @@ async function processFiles(jsonFilePath, mappingFilePath) {
           columnHeaders,
         );
 
-        // Add configs
         allConfigs = allConfigs.concat(batchResult.configs);
 
-        // Accumulate token usage
         totalTokenUsage.promptTokens += batchResult.tokenUsage.promptTokens;
         totalTokenUsage.completionTokens +=
           batchResult.tokenUsage.completionTokens;
         totalTokenUsage.totalTokens += batchResult.tokenUsage.totalTokens;
 
-        // Track per-batch usage
         totalTokenUsage.batchBreakdown.push({
-          batch: batchNumber,
+          batch: globalBatchCount,
           sheet: sheetName,
           rows: batchRows.length,
           ...batchResult.tokenUsage,
         });
 
-        console.log(
-          `    📊 Tokens: ${batchResult.tokenUsage.totalTokens} (prompt: ${batchResult.tokenUsage.promptTokens}, completion: ${batchResult.tokenUsage.completionTokens})`,
+        log(
+          `  [Batch ${globalBatchCount}] Generated ${batchResult.configs.length} configs | Tokens: ${batchResult.tokenUsage.totalTokens}`,
+          "success",
         );
       } catch (error) {
-        console.error(`  ❌ Batch error: ${error.message}`);
+        log(`  [Batch ${globalBatchCount}] ERROR: ${error.message}`, "error");
 
-        // Check if it's a quota exhausted error (daily limit)
         if (
           error.message?.includes("quota") &&
           error.message?.includes("limit: 0")
         ) {
-          console.error(
-            `  ⚠️  Daily quota exhausted. Please wait or upgrade your plan.`,
-          );
+          log("  Daily quota exhausted. Please wait or upgrade.", "error");
         }
-        // Continue with next batch
       }
 
-      // Delay between batches to respect rate limits
+      // Delay between batches
       if (i + BATCH_SIZE < rowCount) {
-        console.log(
-          `    ⏸️  Waiting ${
+        log(
+          `  Waiting ${
             CONFIG.DELAY_BETWEEN_BATCHES_MS / 1000
-          }s before next batch...`,
+          }s (rate limit)...`,
         );
         await sleep(CONFIG.DELAY_BETWEEN_BATCHES_MS);
       }
@@ -162,7 +168,7 @@ async function processFiles(jsonFilePath, mappingFilePath) {
   }
 
   // Step 5: Deduplicate configs
-  console.log("\n🔍 Deduplicating configurations...");
+  log("\nDeduplicating configurations...");
   const uniqueConfigs = [];
   const seen = new Set();
 
@@ -176,24 +182,28 @@ async function processFiles(jsonFilePath, mappingFilePath) {
     }
   });
 
-  console.log(
-    `  ✅ ${allConfigs.length} → ${uniqueConfigs.length} unique configurations`,
+  log(
+    `Deduplicated: ${allConfigs.length} -> ${uniqueConfigs.length} unique configs`,
   );
 
   // Step 6: Generate output Excel
-  console.log("\n📄 Generating output Excel...");
+  log("\nGenerating output Excel file...");
   const { outputDir, generatePath } = setupOutputDirectory();
   const { fileName: outputFileName, fullPath: outputPath } = generatePath();
 
   generateExcelFile(uniqueConfigs, outputPath);
+  log(`Excel file created: ${outputFileName}`);
 
   // Step 7: Cleanup
   await cleanupCache();
 
   const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
-  console.log(`\n✨ Processing complete in ${processingTime}s`);
+  log("-------------------------------------------");
+  log(`Processing complete in ${processingTime}s`);
+  log(`Total tokens used: ${totalTokenUsage.totalTokens}`);
+  log(`Configurations generated: ${uniqueConfigs.length}`);
+  log("-------------------------------------------");
 
-  // Prepare summary stats
   const stats = {
     totalSheets: mappingResult.sheetNames.length,
     sheetsProcessed: mappingResult.sheetNames,
@@ -207,9 +217,7 @@ async function processFiles(jsonFilePath, mappingFilePath) {
 
   return {
     success: true,
-    message:
-      "Input configurations generated successfully using Two-Stage Semantic Compression" +
-      (cache ? " with Context Caching" : ""),
+    message: "Input configurations generated successfully",
     outputFile: outputFileName,
     outputPath,
     generatedConfigs: uniqueConfigs,
@@ -231,6 +239,13 @@ async function processFiles(jsonFilePath, mappingFilePath) {
   };
 }
 
+/**
+ * Legacy function without progress callback
+ */
+async function processFiles(jsonFilePath, mappingFilePath) {
+  return processFilesWithProgress(jsonFilePath, mappingFilePath, () => {});
+}
+
 // Re-export utilities for external use
 const {
   extractColumnMetadata,
@@ -239,26 +254,16 @@ const {
 } = require("./utils/dataProcessing");
 
 module.exports = {
-  // Main function
   processFiles,
-
-  // File readers
+  processFilesWithProgress,
   readJsonFile,
   readMappingFile,
-
-  // Data processing
   flattenJson,
   extractColumnMetadata,
   clusterColumns,
   toMarkdownTable,
-
-  // Excel generation
   generateExcelFile,
-
-  // Cache management
   getOrCreateCache,
   cleanupCache,
-
-  // Configuration
   CONFIG,
 };
