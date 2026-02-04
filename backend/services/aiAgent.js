@@ -437,28 +437,149 @@ function flattenJson(obj, prefix = "") {
 }
 
 /**
- * Generate Excel file from input configurations
+ * Get current date in YYYY-MM-DD format
+ */
+function getCurrentDate() {
+  const now = new Date();
+  return now.toISOString().split("T")[0];
+}
+
+/**
+ * Transform AI output to final Excel format with all 33 columns
+ */
+function transformToFinalFormat(configs) {
+  const currentDate = getCurrentDate();
+
+  return configs.map((config) => ({
+    keyword: config.keyword || config.uniqueIdentifier || "",
+    keywordcaption: config.keywordcaption || config.label || "",
+    keywordtype: config.keywordtype || config.dataType || "",
+    keyworddatatype: config.keyworddatatype || config.dataType || "",
+    parentkeyword: config.parentkeyword || "",
+    keysequence: config.keysequence || "",
+    defaultvalue: config.defaultvalue || "",
+    ismandatory:
+      config.ismandatory || (config.required === "YES" ? "TRUE" : "FALSE"),
+    inputoroutput: config.inputoroutput || "Input",
+    reversecalctype: config.reversecalctype || "",
+    addonstype: config.addonstype || "",
+    controlgivento: config.controlgivento || "",
+    seporagg: config.seporagg || "",
+    defaultuibehaviour: config.defaultuibehaviour || "Show",
+    maxrepeatercount: config.maxrepeatercount || "",
+    keyminvalue: config.keyminvalue || "",
+    keymaxvalue: config.keymaxvalue || "",
+    minlength: config.minlength || "",
+    maxlength: config.maxlength || "",
+    regex: config.regex || "",
+    lookupcondition: config.lookupcondition || "",
+    addlcondition: config.addlcondition || "",
+    metadata: config.metadata || "",
+    chkfieldsource: config.chkfieldsource || "False",
+    defaultadditionstep: config.defaultadditionstep || "",
+    fromeffectivedate: config.fromeffectivedate || currentDate,
+    toeffectivedate: config.toeffectivedate || "",
+    fromversionid: config.fromversionid || "1",
+    toversionid: config.toversionid || "",
+    keywordsection: config.keywordsection || "",
+    coveragecode: config.coveragecode || "",
+    riskitemcode: config.riskitemcode || "",
+    coverageriskcategory: config.coverageriskcategory || "",
+  }));
+}
+
+/**
+ * Generate Excel file from input configurations with all 33 columns
  */
 function generateExcelFile(inputConfigs, outputPath) {
-  const workbook = XLSX.utils.book_new();
-  const worksheet = XLSX.utils.json_to_sheet(inputConfigs);
+  // Transform to final format
+  const finalConfigs = transformToFinalFormat(inputConfigs);
 
+  const workbook = XLSX.utils.book_new();
+
+  // Define column order explicitly
+  const columnOrder = [
+    "keyword",
+    "keywordcaption",
+    "keywordtype",
+    "keyworddatatype",
+    "parentkeyword",
+    "keysequence",
+    "defaultvalue",
+    "ismandatory",
+    "inputoroutput",
+    "reversecalctype",
+    "addonstype",
+    "controlgivento",
+    "seporagg",
+    "defaultuibehaviour",
+    "maxrepeatercount",
+    "keyminvalue",
+    "keymaxvalue",
+    "minlength",
+    "maxlength",
+    "regex",
+    "lookupcondition",
+    "addlcondition",
+    "metadata",
+    "chkfieldsource",
+    "defaultadditionstep",
+    "fromeffectivedate",
+    "toeffectivedate",
+    "fromversionid",
+    "toversionid",
+    "keywordsection",
+    "coveragecode",
+    "riskitemcode",
+    "coverageriskcategory",
+  ];
+
+  const worksheet = XLSX.utils.json_to_sheet(finalConfigs, {
+    header: columnOrder,
+  });
+
+  // Set column widths
   worksheet["!cols"] = [
-    { wch: 25 },
-    { wch: 35 },
-    { wch: 25 },
-    { wch: 12 },
-    { wch: 10 },
-    { wch: 50 },
-    { wch: 30 },
-    { wch: 20 },
-    { wch: 30 },
-    { wch: 20 },
-    { wch: 15 },
+    { wch: 25 }, // keyword
+    { wch: 30 }, // keywordcaption
+    { wch: 15 }, // keywordtype
+    { wch: 15 }, // keyworddatatype
+    { wch: 20 }, // parentkeyword
+    { wch: 12 }, // keysequence
+    { wch: 15 }, // defaultvalue
+    { wch: 12 }, // ismandatory
+    { wch: 15 }, // inputoroutput
+    { wch: 15 }, // reversecalctype
+    { wch: 12 }, // addonstype
+    { wch: 15 }, // controlgivento
+    { wch: 10 }, // seporagg
+    { wch: 18 }, // defaultuibehaviour
+    { wch: 15 }, // maxrepeatercount
+    { wch: 12 }, // keyminvalue
+    { wch: 12 }, // keymaxvalue
+    { wch: 10 }, // minlength
+    { wch: 10 }, // maxlength
+    { wch: 50 }, // regex
+    { wch: 20 }, // lookupcondition
+    { wch: 20 }, // addlcondition
+    { wch: 15 }, // metadata
+    { wch: 15 }, // chkfieldsource
+    { wch: 18 }, // defaultadditionstep
+    { wch: 15 }, // fromeffectivedate
+    { wch: 15 }, // toeffectivedate
+    { wch: 12 }, // fromversionid
+    { wch: 12 }, // toversionid
+    { wch: 15 }, // keywordsection
+    { wch: 15 }, // coveragecode
+    { wch: 15 }, // riskitemcode
+    { wch: 18 }, // coverageriskcategory
   ];
 
   XLSX.utils.book_append_sheet(workbook, worksheet, "Input Configurations");
   XLSX.writeFile(workbook, outputPath);
+  console.log(
+    `✅ Excel generated with ${finalConfigs.length} rows and 33 columns`,
+  );
   return outputPath;
 }
 
@@ -537,12 +658,12 @@ ${rowsTable}
 
 ## Column Headers Explanation:
 The columns in the table above represent metadata about each input field. Common patterns:
-- Field name columns: "Field", "FieldName", "Parameter", "API Key", "InputName"
+- Field name columns: "Field", "FieldName", "Parameter", "API Key", "InputName", "Keyword"
 - Data type columns: "Type", "DataType", "Format"
 - Required columns: "Required", "Mandatory", "M/O"
-- Validation columns: "Validation", "Regex", "Pattern"
+- Validation columns: "Validation", "Regex", "Pattern", "MinLength", "MaxLength", "MinValue", "MaxValue"
 - List/Dropdown columns: "Values", "Options", "ListValues", "Master"
-- Description columns: "Description", "Label"
+- Description columns: "Description", "Label", "Caption"
 
 ## JSON API Reference:
 ${JSON.stringify(jsonRef, null, 2)}
@@ -551,19 +672,43 @@ ${JSON.stringify(jsonRef, null, 2)}
 For EACH ROW in the table above, generate ONE configuration object.
 Total expected outputs: ${batchRows.length} configurations.
 
-## OUTPUT RULES:
-1. uniqueIdentifier: UPPERCASE, underscores, no spaces (derive from field name)
-2. fieldPath: The API path/key for this field
-3. dataType: STRING|NUMBER|DATE|BOOLEAN|LIST|EMAIL|PHONE|ALPHANUMERIC
-4. Apply regex patterns:
-   - EMAIL: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$
-   - PHONE: ^[0-9]{10}$
-   - DATE: ^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[012])/\\d{4}$
-   - PAN: ^[A-Z]{5}[0-9]{4}[A-Z]{1}$
-5. listValues: Extract from dropdown/options columns if present
+## OUTPUT FORMAT - Generate these fields for each row:
+1. keyword: UPPERCASE, underscores, no spaces (e.g., PRODUCT_CODE, INSURED_GENDER)
+2. keywordcaption: Human-readable label/description
+3. keywordtype: STRING|NUMBER|DATE|BOOLEAN|LIST|EMAIL|PHONE|ALPHANUMERIC
+4. keyworddatatype: Same as keywordtype (duplicate for compatibility)
+5. ismandatory: TRUE or FALSE (based on required/mandatory column)
+6. inputoroutput: "System", "Input", or "Output" (default to "Input" if unclear)
+7. defaultuibehaviour: "Show" or "Hide" (default to "Show")
+8. keyminvalue: Minimum numeric value if applicable
+9. keymaxvalue: Maximum numeric value if applicable
+10. minlength: Minimum character length if applicable
+11. maxlength: Maximum character length if applicable
+12. regex: Apply standard patterns for special types:
+    - EMAIL: ^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$
+    - PHONE: ^[0-9]{10}$
+    - DATE: ^(0[1-9]|[12][0-9]|3[01])/(0[1-9]|1[012])/\\d{4}$
+    - PAN: ^[A-Z]{5}[0-9]{4}[A-Z]{1}$
+    - AADHAAR: ^[0-9]{12}$
+    - PINCODE: ^[1-9][0-9]{5}$
+13. chkfieldsource: "True" or "False" (default to "False")
 
-Return ONLY a JSON array with ${batchRows.length} objects:
-[{"uniqueIdentifier":"","fieldPath":"","label":"","dataType":"","required":"YES/NO","regex":"","listValues":"","sampleValue":"","validation":"","mappedFrom":"original field name from row","sourceSheet":"${sheetName}"}]`;
+Return ONLY a JSON array with ${batchRows.length} objects in this exact format:
+[{
+  "keyword": "",
+  "keywordcaption": "",
+  "keywordtype": "",
+  "keyworddatatype": "",
+  "ismandatory": "TRUE/FALSE",
+  "inputoroutput": "Input",
+  "defaultuibehaviour": "Show",
+  "keyminvalue": "",
+  "keymaxvalue": "",
+  "minlength": "",
+  "maxlength": "",
+  "regex": "",
+  "chkfieldsource": "False"
+}]`;
 
   // Use retry with backoff for API calls
   return await retryWithBackoff(async () => {
