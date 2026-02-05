@@ -1,66 +1,57 @@
 # Sample Files
 
-This directory contains sample files to help you test the AI Input Field Generator.
+This directory contains sample files for testing the AI Input Configuration Generator.
 
-## Files Included
+## Files
 
-### 1. sample.json
-A sample insurance product JSON structure containing:
+### sample.json
+Sample insurance product JSON structure containing:
 - Product code
 - Basic details (proposer and insured information)
 - Coverage details
 - Additional benefits
 
-### 2. sample-metadata.xlsx
-Excel file containing field metadata with columns:
-- `fieldName`: Field path in dot notation
-- `label`: Human-readable label
-- `dataType`: Input field type (text, number, date, select, boolean)
-- `required`: Whether the field is mandatory
-- `options`: Comma-separated values for select fields
-- `validation`: Validation rules description
+### sample-metadata.xlsx
+Excel mapping sheet with field metadata.
 
-## How to Use
+## Usage
 
-1. Open the application (http://localhost:3000)
-2. Upload `sample.json` as the JSON file
-3. Upload `sample-metadata.xlsx` as the Excel file
-4. Click "Generate Input Fields"
-5. See the AI-generated form fields!
+1. Open http://localhost:3000
+2. Select "Generator" tab
+3. Upload `sample.json` as JSON file
+4. Upload `sample-metadata.xlsx` as Excel file
+5. Click "Generate"
+6. Download the generated Excel output
 
-## Creating Your Own Files
+## Creating Custom Files
 
 ### JSON File
-Structure your data as nested objects. The AI will flatten it automatically.
+Structure your API data as nested objects. The system flattens it automatically.
 
-Example:
 ```json
 {
-  "field1": "value1",
-  "nested": {
-    "field2": "value2"
+  "productCode": "TERM01",
+  "basicDetails": {
+    "insured": {
+      "gender": "male",
+      "dateOfBirth": "1990-01-01"
+    }
   }
 }
 ```
 
-### Excel Metadata File
-Create an Excel file with these columns (in this order):
-1. fieldName
-2. label
-3. dataType
-4. required
-5. options
-6. validation
+### Excel Mapping Sheet
+The system handles varied formats from different insurers. Common columns include:
+- Field name/identifier
+- Label/caption
+- Data type
+- Required/mandatory flag
+- List values (for dropdowns)
+- Min/max values
+- Regex patterns
 
-**Supported dataType values:**
-- `text` - Text input
-- `number` - Numeric input
-- `date` - Date picker
-- `select` or `dropdown` - Select dropdown
-- `boolean` or `checkbox` - Checkbox
-- `textarea` - Multi-line text
+The AI analyzes the sheet structure automatically - no fixed format required.
 
-**Tips:**
-- Use dot notation for nested fields (e.g., `basicDetails.insured.gender`)
-- For select fields, separate options with commas
-- Mark required as `true` or `false`
+## Output Format
+
+Generated Excel contains 33 standardized columns. See main README for full column list.

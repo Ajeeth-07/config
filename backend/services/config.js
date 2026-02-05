@@ -8,6 +8,12 @@ const CONFIG = {
   MODEL: "gemini-3-pro-preview",
   CACHE_MODEL: "gemini-3-pro-preview",
 
+  // Gemini 3 Thinking Level Configuration
+  // See: https://ai.google.dev/gemini-api/docs/gemini-3#thinking_level
+  // Options: "low" (fast, simple tasks), "high" (deep reasoning, default)
+  // Gemini 3 Flash also supports: "minimal", "medium"
+  THINKING_LEVEL: "high", // Use high for complex insurance domain reasoning
+
   // Batch processing settings
   BATCH_SIZE: 100, // 100 rows per batch (each row = one input field)
   DELAY_BETWEEN_BATCHES_MS: 3000, // 3 seconds between batches
@@ -19,6 +25,10 @@ const CONFIG = {
   // Caching settings
   ENABLE_CACHING: true,
   CACHE_TTL_SECONDS: 3600,
+
+  // RAG-based thinking level optimization
+  // When RAG provides high-confidence matches, use lower thinking for speed
+  THINKING_LEVEL_WITH_RAG_CONTEXT: "high", // RAG provides context, less reasoning needed
 };
 
 /**

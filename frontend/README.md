@@ -1,67 +1,51 @@
-# Frontend - AI Input Field Generator
+# Frontend - AI Input Configuration Generator
 
-## Overview
-React-based frontend for uploading files and displaying AI-generated input fields.
+React frontend for AI-powered input configuration generation.
 
-## Installation
+## Quick Start
 
 ```bash
 npm install
-```
-
-## Running the Application
-
-Development mode:
-```bash
 npm start
 ```
 
-Build for production:
-```bash
-npm run build
-```
+Opens at http://localhost:3000
 
 ## Features
 
-- File upload interface (JSON and Excel)
-- Real-time processing status
-- Tabbed view for results:
-  - Generated Fields (interactive form)
-  - Original JSON
-  - Excel Metadata
-- Responsive design
-- Error handling with user-friendly messages
+### Generator Tab
+- Upload JSON (API structure) and Excel/CSV (mapping sheet)
+- Enable/disable RAG for enhanced generation
+- Real-time progress display (terminal-style)
+- Download generated Excel output
+- Token usage metrics
+
+### Knowledge Base Tab
+- View RAG statistics
+- Upload training data (existing configurations)
+- Real-time ingestion progress
+- Search knowledge base
+- Manage data (clear, delete by insurer)
 
 ## Components
 
-### App.js
-Main application component with state management
+| Component | Description |
+|-----------|-------------|
+| FileUpload.js | File selection and upload form |
+| Terminal.js | Real-time processing status display |
+| FieldDisplay.js | Results and download interface |
+| KnowledgeBase.js | RAG management interface |
 
-### FileUpload.js
-- Handles file selection
-- Validates file types
-- Submits to backend API
-- Reset functionality
+## Backend Connection
 
-### FieldDisplay.js
-- Displays generated fields
-- Interactive form inputs
-- Tabbed interface
-- Supports multiple field types
+Connects to backend at http://localhost:5000
+
+For SSE (Server-Sent Events), the frontend connects directly to the backend to avoid proxy buffering issues.
 
 ## Styling
 
-All components use CSS modules for scoped styling:
-- Modern gradient backgrounds
-- Smooth animations
-- Responsive grid layouts
-- Accessible form elements
-
-## API Integration
-
-The frontend communicates with the backend via proxy configuration in `package.json`:
-```json
-"proxy": "http://localhost:5000"
-```
-
-Change this if your backend runs on a different port.
+90s-inspired minimal design with:
+- Gray backgrounds
+- Navy/green accents
+- Monospace fonts
+- Inset/outset borders

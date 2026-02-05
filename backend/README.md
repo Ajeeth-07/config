@@ -1,80 +1,80 @@
-# Backend - AI Input Field Generator
+# Backend - AI Input Configuration Generator
 
-## Overview
-Node.js/Express backend with Gemini AI integration for processing JSON and Excel files.
+Node.js/Express backend service for AI-powered input configuration generation.
 
-## Installation
+## Quick Start
 
 ```bash
 npm install
+npm run dev
 ```
 
 ## Environment Variables
 
-Create a `.env` file:
-
+Create `.env` file:
 ```env
 PORT=5000
-GEMINI_API_KEY=your_gemini_api_key_here
-```
-
-## Running the Server
-
-Development mode (with auto-reload):
-```bash
-npm run dev
-```
-
-Production mode:
-```bash
-npm start
+GEMINI_API_KEY=your_api_key_here
 ```
 
 ## API Endpoints
 
-### POST `/api/upload/process`
+### Upload API (`/api/upload`)
 
-Upload and process JSON and Excel files.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | /process | Process JSON and Excel files |
+| GET | /progress/:sessionId | SSE progress stream |
+| GET | /download/:filename | Download generated file |
 
-**Request:**
-- Content-Type: `multipart/form-data`
-- Fields:
-  - `jsonFile`: JSON file
-  - `excelFile`: Excel file (.xlsx or .xls)
+### RAG API (`/api/rag`)
 
-**Response:**
-```json
-{
-  "success": true,
-  "originalJson": {...},
-  "flattenedJson": {...},
-  "excelMetadata": [...],
-  "generatedFields": [...],
-  "fieldCount": 10
-}
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | /init | Initialize vector store |
+| GET | /stats | Get knowledge base stats |
+| POST | /ingest | Ingest Excel/CSV training data |
+| POST | /ingest-json | Ingest JSON configurations |
+| POST | /search | Search similar configs |
+| GET | /export | View all data (JSON) |
+| GET | /export?format=html | View all data (HTML) |
+| GET | /vectors | View embeddings (JSON) |
+| GET | /vectors?format=html | View embeddings (HTML) |
+| GET | /download | Download KB backup |
+| POST | /test-embedding | Test text to vector |
+| DELETE | /clear | Clear all data |
+| DELETE | /insurer/:name | Delete by insurer |
+
+## Data Storage
+
+```
+data/rag/
+├── vectors.json    # Embeddings (768-dim arrays)
+└── metadata.json   # Document content and metadata
 ```
 
-### GET `/api/health`
+## Services Architecture
 
-Health check endpoint.
-
-**Response:**
-```json
-{
-  "status": "ok",
-  "message": "AI Input Generator API is running"
-}
+```
+services/
+├── rag/
+│   ├── config.js           # RAG configuration
+│   ├── embeddingService.js # Gemini embeddings
+│   ├── vectorStore.js      # Vector storage
+│   ├── ingestionService.js # Data ingestion
+│   └── retrievalService.js # Similarity search
+├── utils/
+│   ├── helpers.js          # Utilities
+│   ├── fileReaders.js      # File parsing
+│   └── dataProcessing.js   # Data transforms
+├── aiProcessor.js          # LLM interaction
+├── cacheService.js         # Context caching
+├── excelGenerator.js       # Excel output
+├── config.js               # Main config
+└── index.js                # Orchestration
 ```
 
-## Dependencies
+## Configuration
 
-- `express`: Web framework
-- `@google/generative-ai`: Gemini AI SDK
-- `multer`: File upload handling
-- `cors`: Cross-origin resource sharing
-- `dotenv`: Environment variable management
-- `xlsx`: Excel file parsing
-
-## Error Handling
-
-All errors return appropriate HTTP status codes with error messages in JSON format.
+Edit `services/config.js` for LLM settings.
+Edit `services/rag/config.js` for RAG settings.

@@ -105,6 +105,7 @@ router.post(
   ]),
   async (req, res) => {
     const sessionId = req.body.sessionId || Date.now().toString();
+    const useRAG = req.body.useRAG === "true" || req.body.useRAG === true;
 
     try {
       if (!req.files.jsonFile || !req.files.excelFile) {
@@ -124,6 +125,7 @@ router.post(
         jsonFilePath,
         excelFilePath,
         (message, type) => sendProgress(sessionId, message, type),
+        { useRAG },
       );
 
       // Clean up uploaded files

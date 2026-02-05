@@ -1,0 +1,98 @@
+/* 90s Style Knowledge Base */
+.kb-container {
+  margin-top: 10px;
+}
+
+.kb-box {
+  background: #c0c0c0;
+  border: 2px outset #fff;
+  padding: 10px;
+}
+
+.kb-box h2 {
+  background: #800080;
+  color: #fff;
+  margin: -10px -10px 10px -10px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.kb-stats {
+  display: flex;
+  gap: 15px;
+  background: #fff;
+  border: 2px inset #808080;
+  padding: 8px;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+
+.stat-item strong {
+  color: #000080;
+}
+
+.kb-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #808080;
+}
+
+.kb-section h3 {
+  font-size: 11px;
+  margin: 0 0 8px 0;
+  color: #000;
+}
+
+.form-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.form-row label {
+  font-size: 11px;
+  min-width: 100px;
+}
+
+.form-row input[type="text"] {
+  font-family: "Courier New", monospace;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 2px inset #808080;
+  background: #fff;
+  flex: 1;
+}
+
+.form-row input[type="file"] {
+  font-size: 10px;
+  flex: 1;
+}
+
+.kb-logs {
+  background: #000;
+  color: #0f0;
+  font-family: "Courier New", monospace;
+  font-size: 10px;
+  padding: 6px;
+  margin-top: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+  border: 2px inset #808080;
+}
+
+.kb-results {
+  margin-top: 8px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.kb-results .data-table {
+  font-size: 10px;
+}
+
+.kb-results .data-table th,
+.kb-results .data-table td {
+  padding: 3px 5px;
+}

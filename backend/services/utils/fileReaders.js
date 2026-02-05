@@ -1,5 +1,6 @@
 /**
  * File reading utilities for JSON and Excel/CSV files
+ * Sheet classification is handled separately by sheetClassifier.js using AI
  */
 
 const fs = require("fs");
@@ -24,8 +25,9 @@ function readJsonFile(filePath) {
 
 /**
  * Reads and parses Excel or CSV file with full metadata extraction
+ * Returns ALL sheets - classification is done separately by AI
  * @param {string} filePath - Path to Excel/CSV file
- * @returns {Object} Result with sheet data, structural fingerprint, and metadata
+ * @returns {Object} Result with sheet data and structural fingerprint
  */
 function readMappingFile(filePath) {
   try {
@@ -50,7 +52,7 @@ function readMappingFile(filePath) {
         rowCount: data.length,
         columnMetadata: columns.map((col) => extractColumnMetadata(data, col)),
         clusters: clusterColumns(columns),
-        sampleRows: data.slice(0, 3),
+        sampleRows: data.slice(0, 5),
       };
     } else {
       const workbook = XLSX.readFile(filePath);
@@ -59,9 +61,10 @@ function readMappingFile(filePath) {
       for (const sheetName of sheetNames) {
         const worksheet = workbook.Sheets[sheetName];
         const data = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
-        allSheetsData[sheetName] = data;
 
         const columns = data.length > 0 ? Object.keys(data[0]) : [];
+
+        allSheetsData[sheetName] = data;
         structuralFingerprint[sheetName] = {
           columns,
           rowCount: data.length,
@@ -69,15 +72,15 @@ function readMappingFile(filePath) {
             extractColumnMetadata(data, col),
           ),
           clusters: clusterColumns(columns),
-          sampleRows: data.slice(0, 3),
+          sampleRows: data.slice(0, 5),
         };
       }
     }
 
     return {
       valid: true,
-      sheetNames,
-      allSheetsData,
+      sheetNames, // All sheet names
+      allSheetsData, // All sheet data
       structuralFingerprint,
       fileType: ext,
     };

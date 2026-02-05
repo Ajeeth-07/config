@@ -99,3 +99,52 @@ body {
   color: #f00;
   font-size: 12px;
 }
+
+/* Main Tabs */
+.main-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0;
+}
+
+.main-tab {
+  font-family: "Courier New", monospace;
+  font-size: 12px;
+  padding: 6px 20px;
+  cursor: pointer;
+  border: 2px outset #fff;
+  border-bottom: none;
+  background: #a0a0a0;
+  color: #000;
+}
+
+.main-tab.active {
+  background: #c0c0c0;
+  border-bottom: 2px solid #c0c0c0;
+  font-weight: bold;
+}
+
+.main-tab:hover {
+  background: #b0b0b0;
+}
+
+/* RAG Toggle */
+.rag-toggle {
+  background: #ffffc0;
+  border: 2px inset #808080;
+  padding: 6px 10px;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+
+.rag-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.rag-toggle input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+}
