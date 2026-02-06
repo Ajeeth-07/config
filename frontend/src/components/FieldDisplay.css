@@ -46,6 +46,25 @@
   font-size: 12px;
 }
 
+.download-row {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.download-item {
+  text-align: center;
+}
+
+.btn-download-lv {
+  background: #000080;
+}
+
+.btn-download-lv:hover {
+  background: #0000b0;
+}
+
 .btn-download {
   font-family: "Courier New", monospace;
   font-size: 12px;

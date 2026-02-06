@@ -84,6 +84,28 @@ function normalizeColumns(data) {
     keymaxvalue: "keymaxvalue",
     maxvalue: "keymaxvalue",
     max_value: "keymaxvalue",
+    // List value columns
+    keyworddisplay: "keyworddisplay",
+    display: "keyworddisplay",
+    display_name: "keyworddisplay",
+    option_label: "keyworddisplay",
+    optionlabel: "keyworddisplay",
+    keywordvalue: "keywordvalue",
+    value: "keywordvalue",
+    option_value: "keywordvalue",
+    optionvalue: "keywordvalue",
+    code: "keywordvalue",
+    keyvalsequence: "keyvalsequence",
+    sequence: "keyvalsequence",
+    sort_order: "keyvalsequence",
+    sortorder: "keyvalsequence",
+    defaultselected: "defaultselected",
+    default_selected: "defaultselected",
+    isdefault: "defaultselected",
+    is_default: "defaultselected",
+    keywordvaluecaption: "keywordvaluecaption",
+    value_caption: "keywordvaluecaption",
+    valuecaption: "keywordvaluecaption",
   };
 
   return data.map((row) => {
@@ -115,6 +137,53 @@ function normalizeColumns(data) {
 
     return normalized;
   });
+}
+
+/**
+ * Detect whether a dataset represents list values (dropdown options)
+ * rather than input field configurations.
+ *
+ * List value files have columns like keyworddisplay, keywordvalue, keyvalsequence.
+ * Input config files have columns like keywordtype, ismandatory, regex.
+ *
+ * @param {Object[]} data - Array of row objects
+ * @returns {string} "list_value" or "input_config"
+ */
+function detectDocType(data) {
+  if (!data || data.length === 0) return "input_config";
+
+  const sampleRow = data[0];
+  const keys = Object.keys(sampleRow).map((k) =>
+    k.toLowerCase().replace(/[\s_-]/g, ""),
+  );
+
+  const listValueIndicators = [
+    "keyworddisplay",
+    "keywordvalue",
+    "keyvalsequence",
+    "defaultselected",
+    "keywordvaluecaption",
+  ];
+
+  const inputConfigIndicators = [
+    "keywordtype",
+    "ismandatory",
+    "regex",
+    "minlength",
+    "maxlength",
+    "datatype",
+    "mandatory",
+    "required",
+  ];
+
+  const listScore = listValueIndicators.filter((ind) =>
+    keys.includes(ind),
+  ).length;
+  const inputScore = inputConfigIndicators.filter((ind) =>
+    keys.includes(ind),
+  ).length;
+
+  return listScore >= 2 ? "list_value" : "input_config";
 }
 
 /**
@@ -226,6 +295,12 @@ async function ingestExcelFile(
     return { success: false, error: "No valid configurations found in file" };
   }
 
+  // Auto-detect whether this file contains list values or input configs
+  const detectedDocType = detectDocType(allConfigs);
+  allConfigs.forEach((row) => {
+    row.docType = detectedDocType;
+  });
+  log(`Document type detected: ${detectedDocType}`);
   log(`Total configurations to ingest: ${allConfigs.length}`);
 
   // Build and store parent document
@@ -273,6 +348,12 @@ async function ingestFromJson(
   if (filtered.length === 0) {
     return { success: false, error: "No valid configurations in data" };
   }
+
+  // Auto-detect doc type
+  const detectedDocType = detectDocType(filtered);
+  filtered.forEach((row) => {
+    row.docType = detectedDocType;
+  });
 
   // Build and store parent document
   const parentSummary = buildParentSummary(filtered, lob, insurer, product);

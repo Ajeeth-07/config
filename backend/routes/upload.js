@@ -176,14 +176,6 @@ router.get("/download/:filename", (req, res) => {
 
   const fileStream = fs.createReadStream(filePath);
   fileStream.pipe(res);
-
-  fileStream.on("end", () => {
-    setTimeout(() => {
-      try {
-        fs.unlinkSync(filePath);
-      } catch (e) {}
-    }, 5000);
-  });
 });
 
 module.exports = router;

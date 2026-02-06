@@ -21,8 +21,17 @@ const {
 
 // Import services
 const { getOrCreateCache, getModel, cleanupCache } = require("./cacheService");
-const { generateExcelFile, setupOutputDirectory } = require("./excelGenerator");
-const { processRowBatch, logProcessingSummary } = require("./aiProcessor");
+const {
+  generateExcelFile,
+  generateListValuesFile,
+  setupOutputDirectory,
+  normalizeDataType,
+} = require("./excelGenerator");
+const {
+  processRowBatch,
+  processListValuesBatch,
+  logProcessingSummary,
+} = require("./aiProcessor");
 
 /**
  * Main function with progress callback for real-time updates
@@ -451,13 +460,195 @@ async function processFilesWithProgress(
     `Deduplicated: ${allConfigs.length} -> ${uniqueConfigs.length} unique configs`,
   );
 
-  // Step 6: Generate output Excel
-  log("\nGenerating output Excel file...");
+  // Step 5.5: Generate list values for List-type configs
+  log("\nGenerating list values for List-type fields...");
+  let allListValues = [];
+  let listValuesTokenUsage = {
+    promptTokens: 0,
+    completionTokens: 0,
+    totalTokens: 0,
+  };
+
+  // Apply normalizeDataType to identify List fields accurately
+  const listConfigs = uniqueConfigs.filter((c) => {
+    const keyword = c.keyword || "";
+    const caption = c.keywordcaption || "";
+    const rawType = c.keywordtype || c.dataType || "";
+    const normalized = normalizeDataType(rawType, keyword, caption);
+    return normalized === "List";
+  });
+
+  if (listConfigs.length > 0) {
+    log(`Found ${listConfigs.length} List-type fields needing values`);
+
+    // Try RAG first for list values
+    let ragListContext = "";
+    if (ragServices && ragStats && ragStats.totalDocuments > 0) {
+      try {
+        const listKeywords = listConfigs
+          .map((c) => c.keyword || c.keywordcaption || "")
+          .filter(Boolean);
+        const ragListMatches = [];
+
+        // Search RAG for list values for each keyword
+        for (const kw of listKeywords.slice(0, 30)) {
+          // Cap at 30 to avoid too many API calls
+          const results = await ragServices.searchSimilar(kw, {
+            topK: 5,
+            docType: "list_value",
+            minSimilarity: 0.5,
+          });
+          if (results.length > 0) {
+            results.forEach((r) => {
+              if (r.metadata?.keyworddisplay && r.metadata?.keywordvalue) {
+                ragListMatches.push(r.metadata);
+              }
+            });
+          }
+        }
+
+        if (ragListMatches.length > 0) {
+          ragListContext =
+            "## List values from knowledge base (reuse these patterns):\n";
+          ragListContext += "| keyword | display | value | sequence |\n";
+          ragListContext += "|---------|---------|-------|----------|\n";
+          ragListMatches.slice(0, 30).forEach((m) => {
+            ragListContext += `| ${m.keyword} | ${m.keyworddisplay} | ${m.keywordvalue} | ${m.keyvalsequence} |\n`;
+          });
+          ragListContext += "\n";
+          log(
+            `  RAG: Found ${ragListMatches.length} list value references from KB`,
+          );
+
+          // Use RAG list values directly where keyword matches exactly
+          const ragKeywordMap = {};
+          ragListMatches.forEach((m) => {
+            const kw = m.keyword;
+            if (!ragKeywordMap[kw]) ragKeywordMap[kw] = [];
+            ragKeywordMap[kw].push({
+              keyword: kw,
+              keyworddisplay: m.keyworddisplay,
+              keywordvalue: m.keywordvalue,
+              defaultselected: m.defaultselected || "False",
+              keyvalsequence: m.keyvalsequence,
+            });
+          });
+
+          // Separate into RAG-resolved and needs-LLM
+          const resolvedKeywords = new Set();
+          Object.entries(ragKeywordMap).forEach(([kw, values]) => {
+            // Check if any of our list configs match this RAG keyword
+            const matchingConfig = listConfigs.find(
+              (c) =>
+                c.keyword === kw ||
+                (c.keyword &&
+                  kw &&
+                  c.keyword.toUpperCase() === kw.toUpperCase()),
+            );
+            if (matchingConfig) {
+              // Use RAG values with the exact keyword from our generated config
+              values.forEach((v) => {
+                allListValues.push({ ...v, keyword: matchingConfig.keyword });
+              });
+              resolvedKeywords.add(matchingConfig.keyword);
+            }
+          });
+
+          if (resolvedKeywords.size > 0) {
+            log(
+              `  RAG: Resolved list values for ${resolvedKeywords.size} keywords directly`,
+            );
+          }
+        }
+      } catch (e) {
+        log(`  RAG list search error: ${e.message}`, "error");
+      }
+    }
+
+    // Generate remaining list values via LLM
+    const unresolvedConfigs = listConfigs.filter(
+      (c) => !allListValues.some((lv) => lv.keyword === c.keyword),
+    );
+
+    if (unresolvedConfigs.length > 0) {
+      log(
+        `  Generating list values via LLM for ${unresolvedConfigs.length} keywords...`,
+      );
+
+      // Also extract any raw list values from the original mapping data
+      // (e.g., "Male,Female" in a Values column)
+      unresolvedConfigs.forEach((c) => {
+        if (!c.rawListValues) {
+          // Look in original config for list value hints
+          const raw = c.listValues || c.values || c.options || c.dropdown || "";
+          if (raw) c.rawListValues = String(raw);
+        }
+      });
+
+      try {
+        // Process in batches of 20 keywords to keep prompts manageable
+        const LV_BATCH_SIZE = 20;
+        for (let i = 0; i < unresolvedConfigs.length; i += LV_BATCH_SIZE) {
+          const batch = unresolvedConfigs.slice(i, i + LV_BATCH_SIZE);
+
+          const lvResult = await processListValuesBatch(
+            model,
+            batch,
+            ragListContext,
+            referenceContext,
+          );
+
+          allListValues.push(...lvResult.listValues);
+          listValuesTokenUsage.promptTokens += lvResult.tokenUsage.promptTokens;
+          listValuesTokenUsage.completionTokens +=
+            lvResult.tokenUsage.completionTokens;
+          listValuesTokenUsage.totalTokens += lvResult.tokenUsage.totalTokens;
+
+          log(
+            `  [LV Batch ${Math.floor(i / LV_BATCH_SIZE) + 1}] Generated ${
+              lvResult.listValues.length
+            } list values | Tokens: ${lvResult.tokenUsage.totalTokens}`,
+          );
+
+          if (i + LV_BATCH_SIZE < unresolvedConfigs.length) {
+            await sleep(CONFIG.DELAY_BETWEEN_BATCHES_MS);
+          }
+        }
+      } catch (e) {
+        log(`  List values LLM error: ${e.message}`, "error");
+      }
+    }
+
+    // Add list value tokens to total
+    totalTokenUsage.promptTokens += listValuesTokenUsage.promptTokens;
+    totalTokenUsage.completionTokens += listValuesTokenUsage.completionTokens;
+    totalTokenUsage.totalTokens += listValuesTokenUsage.totalTokens;
+
+    log(
+      `Total list values generated: ${allListValues.length} for ${listConfigs.length} keywords`,
+    );
+  } else {
+    log("No List-type fields found, skipping list values generation");
+  }
+
+  // Step 6: Generate output Excel files
+  log("\nGenerating output Excel files...");
   const { outputDir, generatePath } = setupOutputDirectory();
   const { fileName: outputFileName, fullPath: outputPath } = generatePath();
 
   generateExcelFile(uniqueConfigs, outputPath);
-  log(`Excel file created: ${outputFileName}`);
+  log(`Input configs Excel created: ${outputFileName}`);
+
+  // Generate list values Excel if we have any
+  let listValuesFileName = null;
+  let listValuesPath = null;
+  if (allListValues.length > 0) {
+    const lvPath = generatePath("list_values");
+    listValuesFileName = lvPath.fileName;
+    listValuesPath = lvPath.fullPath;
+    generateListValuesFile(allListValues, listValuesPath);
+    log(`List values Excel created: ${listValuesFileName}`);
+  }
 
   // Step 7: Cleanup
   await cleanupCache();
@@ -494,8 +685,12 @@ async function processFilesWithProgress(
     message: "Input configurations generated successfully",
     outputFile: outputFileName,
     outputPath,
+    listValuesFile: listValuesFileName,
+    listValuesPath,
     generatedConfigs: uniqueConfigs,
+    generatedListValues: allListValues,
     configCount: uniqueConfigs.length,
+    listValuesCount: allListValues.length,
     originalJson: jsonResult.data,
     flattenedJson,
     mappingData: Object.values(mappingResult.allSheetsData).flat().slice(0, 50),

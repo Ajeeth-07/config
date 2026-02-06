@@ -318,9 +318,94 @@ function setupOutputDirectory(baseDir = path.join(__dirname, "..", "outputs")) {
   };
 }
 
+/**
+ * Column order for list values output Excel
+ */
+const LIST_VALUES_COLUMN_ORDER = [
+  "keyworddisplay",
+  "keyword",
+  "keywordvalue",
+  "defaultselected",
+  "keyvalsequence",
+  "metadata",
+  "fromeffectivedate",
+  "toeffectivedate",
+  "fromversionid",
+  "toversionid",
+  "keywordvaluecaption",
+];
+
+const LIST_VALUES_COLUMN_WIDTHS = [
+  { wch: 30 }, // keyworddisplay
+  { wch: 25 }, // keyword
+  { wch: 15 }, // keywordvalue
+  { wch: 15 }, // defaultselected
+  { wch: 15 }, // keyvalsequence
+  { wch: 20 }, // metadata
+  { wch: 18 }, // fromeffectivedate
+  { wch: 18 }, // toeffectivedate
+  { wch: 15 }, // fromversionid
+  { wch: 15 }, // toversionid
+  { wch: 25 }, // keywordvaluecaption
+];
+
+/**
+ * Transform raw list value entries to the standardized 11-column format
+ * @param {Array} listValues - Array of raw list value objects from AI/RAG
+ * @returns {Array} Transformed list values
+ */
+function transformListValues(listValues) {
+  const currentDate = getCurrentDate();
+
+  return listValues.map((lv) => ({
+    keyworddisplay: lv.keyworddisplay || lv.display || "",
+    keyword: lv.keyword || "",
+    keywordvalue: String(lv.keywordvalue ?? lv.value ?? ""),
+    defaultselected: lv.defaultselected || "False",
+    keyvalsequence: String(lv.keyvalsequence ?? lv.sequence ?? ""),
+    metadata: lv.metadata || "",
+    fromeffectivedate: lv.fromeffectivedate || currentDate,
+    toeffectivedate: lv.toeffectivedate || "",
+    fromversionid: lv.fromversionid || "1",
+    toversionid: lv.toversionid || "",
+    keywordvaluecaption: lv.keywordvaluecaption || "",
+  }));
+}
+
+/**
+ * Generate list values Excel file
+ * @param {Array} listValues - Array of list value objects
+ * @param {string} outputPath - Full path for output file
+ * @returns {string} Output file path
+ */
+function generateListValuesFile(listValues, outputPath) {
+  const finalValues = transformListValues(listValues);
+
+  const workbook = XLSX.utils.book_new();
+
+  const worksheet = XLSX.utils.json_to_sheet(finalValues, {
+    header: LIST_VALUES_COLUMN_ORDER,
+  });
+
+  worksheet["!cols"] = LIST_VALUES_COLUMN_WIDTHS;
+
+  XLSX.utils.book_append_sheet(workbook, worksheet, "List Values");
+  XLSX.writeFile(workbook, outputPath);
+
+  // Count unique keywords
+  const uniqueKeywords = new Set(finalValues.map((v) => v.keyword));
+  console.log(
+    `List values Excel generated: ${finalValues.length} values for ${uniqueKeywords.size} keywords`,
+  );
+
+  return outputPath;
+}
+
 module.exports = {
+  normalizeDataType,
   transformToFinalFormat,
   generateExcelFile,
+  generateListValuesFile,
   generateStructuralSummary,
   setupOutputDirectory,
 };

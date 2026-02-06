@@ -394,6 +394,7 @@ async function addConfigs(
 
     newMetadatas.push({
       type: "child",
+      docType: config.docType || "input_config", // "input_config" or "list_value"
       parentId: parentId || makeParentId(lob, insurer, product),
       lob,
       keyword: config.keyword || config.uniqueIdentifier || "",
@@ -406,6 +407,10 @@ async function addConfigs(
       maxlength: String(config.maxlength || ""),
       keyminvalue: String(config.keyminvalue || ""),
       keymaxvalue: String(config.keymaxvalue || ""),
+      // List value specific fields (only present for docType: list_value)
+      keyworddisplay: config.keyworddisplay || "",
+      keywordvalue: String(config.keywordvalue ?? ""),
+      keyvalsequence: String(config.keyvalsequence ?? ""),
       insurer,
       product,
       mappedFrom: config.mappedFrom || "",
@@ -462,6 +467,7 @@ async function searchSimilar(query, options = {}) {
     topK = RAG_CONFIG.RETRIEVAL.TOP_K,
     minSimilarity = RAG_CONFIG.RETRIEVAL.MIN_SIMILARITY,
     lob = null, // Optional LOB filter for parent boost
+    docType = null, // Optional: "input_config" or "list_value"
   } = options;
 
   if (childStore.ids.length === 0) return [];
@@ -477,6 +483,15 @@ async function searchSimilar(query, options = {}) {
 
   for (let i = 0; i < childStore.embeddings.length; i++) {
     if (!childStore.embeddings[i]) continue;
+
+    // Filter by docType if specified
+    if (
+      docType &&
+      childStore.metadatas[i].docType &&
+      childStore.metadatas[i].docType !== docType
+    ) {
+      continue;
+    }
 
     let similarity = cosineSimilarity(queryEmbedding, childStore.embeddings[i]);
 

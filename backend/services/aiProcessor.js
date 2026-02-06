@@ -286,8 +286,119 @@ function logProcessingSummary(batchNum, tokenUsage, configCount) {
   );
 }
 
+/**
+ * Generate list values (dropdown options) for List-type configs via LLM.
+ *
+ * @param {Object} model - Gemini model instance
+ * @param {Array} listConfigs - Array of configs with keywordtype "List".
+ *   Each must have at least { keyword, keywordcaption }. May also carry
+ *   rawListValues (comma-separated options from the mapping sheet).
+ * @param {string} ragListContext - RAG context with similar list values from KB
+ * @param {string} sheetRefContext - Reference context from context sheets
+ * @returns {Object} { listValues: Array, tokenUsage: Object }
+ */
+async function processListValuesBatch(
+  model,
+  listConfigs,
+  ragListContext = "",
+  sheetRefContext = "",
+) {
+  // Build a summary table of the List fields we need values for
+  let fieldsTable = "| keyword | caption | rawValues |\n";
+  fieldsTable += "|---------|---------|----------|\n";
+  listConfigs.forEach((c) => {
+    const raw = c.rawListValues || c.listValues || "";
+    fieldsTable += `| ${c.keyword} | ${c.keywordcaption || ""} | ${String(
+      raw,
+    ).substring(0, 200)} |\n`;
+  });
+
+  let prompt = "";
+
+  if (sheetRefContext) {
+    prompt += `${sheetRefContext}\n`;
+  }
+
+  if (ragListContext) {
+    prompt += `${ragListContext}\n`;
+    prompt += `IMPORTANT: Use the list values from the knowledge base reference above as a guide. Reuse exact keywordvalue codes and display names when the keyword/caption is similar.\n\n`;
+  }
+
+  prompt += `Generate dropdown/list option values for these ${listConfigs.length} List-type input fields.
+
+## LIST FIELDS THAT NEED VALUES:
+${fieldsTable}
+
+## RULES:
+1. For EACH keyword above, generate ALL reasonable option values
+2. If "rawValues" already contains comma-separated options, use those EXACTLY
+3. If no rawValues are given, generate sensible defaults based on the field name:
+   - Gender fields: Male, Female, Transgender, Other
+   - Salutation fields: Mr, Mrs, Miss, Ms, Dr
+   - Yes/No fields: Yes, No
+   - Marital Status: Single, Married, Divorced, Widowed
+   - Occupation type: Salaried, Self Employed, Business, Professional, Retired, Student, Homemaker
+   - Nationality: Indian, NRI, PIO, Foreign National
+   - Use domain knowledge for insurance-specific fields
+4. keywordvalue should be a short code: sequential number ("1","2","3") OR uppercase short code ("MR","MRS","MALE","FEMALE")
+5. keyvalsequence must be sequential starting from 1 for each keyword
+6. defaultselected should be "False" for all values unless it is an obvious default
+
+## OUTPUT FORMAT:
+Return ONLY a JSON array. Each element = one option value:
+[{
+  "keyword": "EXACT_KEYWORD_FROM_ABOVE",
+  "keyworddisplay": "Human Readable Option Label",
+  "keywordvalue": "CODE_OR_NUMBER",
+  "defaultselected": "False",
+  "keyvalsequence": 1
+}]
+
+Generate values for ALL ${listConfigs.length} keywords. Return a flat array (not nested).`;
+
+  const thinkingLevel = ragListContext
+    ? CONFIG.THINKING_LEVEL_WITH_RAG_CONTEXT
+    : CONFIG.THINKING_LEVEL;
+
+  return await retryWithBackoff(async () => {
+    const generationConfig = {
+      thinkingConfig: {
+        thinkingLevel: thinkingLevel,
+      },
+    };
+
+    const result = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig,
+    });
+    const response = result.response;
+
+    const usageMetadata = response.usageMetadata || {};
+    const tokenUsage = {
+      promptTokens: usageMetadata.promptTokenCount || 0,
+      completionTokens: usageMetadata.candidatesTokenCount || 0,
+      totalTokens: usageMetadata.totalTokenCount || 0,
+      thinkingLevel,
+    };
+
+    let text = response.text();
+    text = text
+      .replace(/```json\n?/g, "")
+      .replace(/```\n?/g, "")
+      .trim();
+
+    const listValues = JSON.parse(text);
+
+    return {
+      listValues: Array.isArray(listValues) ? listValues : [],
+      tokenUsage,
+    };
+  });
+}
+
 module.exports = {
   processRowBatch,
   processRowBatchWithRAG,
+  processListValuesBatch,
   logProcessingSummary,
 };

@@ -77,6 +77,7 @@ function PricingBreakdown({ tokenUsage }) {
 function FieldDisplay({ data }) {
   const [activeTab, setActiveTab] = useState("configs");
   const [downloading, setDownloading] = useState(false);
+  const [downloadingLV, setDownloadingLV] = useState(false);
 
   const handleDownload = async () => {
     if (!data.outputFile) return;
@@ -100,6 +101,30 @@ function FieldDisplay({ data }) {
       alert("Download failed. Please try again.");
     }
     setDownloading(false);
+  };
+
+  const handleDownloadListValues = async () => {
+    if (!data.listValuesFile) return;
+
+    setDownloadingLV(true);
+    try {
+      const response = await axios.get(
+        `/api/upload/download/${data.listValuesFile}`,
+        { responseType: "blob" },
+      );
+
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", data.listValuesFile);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      alert("Download failed. Please try again.");
+    }
+    setDownloadingLV(false);
   };
 
   return (
@@ -127,16 +152,35 @@ function FieldDisplay({ data }) {
       </div>
 
       <div className="download-section">
-        <p>
-          Output file ready: <strong>{data.outputFile}</strong>
-        </p>
-        <button
-          className="btn-download"
-          onClick={handleDownload}
-          disabled={downloading}
-        >
-          {downloading ? "Downloading..." : "Download Excel"}
-        </button>
+        <div className="download-row">
+          <div className="download-item">
+            <p>
+              Input Configs: <strong>{data.outputFile}</strong>
+            </p>
+            <button
+              className="btn-download"
+              onClick={handleDownload}
+              disabled={downloading}
+            >
+              {downloading ? "Downloading..." : "Download Input Configs"}
+            </button>
+          </div>
+          {data.listValuesFile && (
+            <div className="download-item">
+              <p>
+                List Values: <strong>{data.listValuesFile}</strong> (
+                {data.listValuesCount || 0} values)
+              </p>
+              <button
+                className="btn-download btn-download-lv"
+                onClick={handleDownloadListValues}
+                disabled={downloadingLV}
+              >
+                {downloadingLV ? "Downloading..." : "Download List Values"}
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="tabs">
@@ -146,6 +190,14 @@ function FieldDisplay({ data }) {
         >
           Configs ({data.configCount})
         </button>
+        {data.listValuesFile && (
+          <button
+            className={`tab-btn ${activeTab === "listvals" ? "active" : ""}`}
+            onClick={() => setActiveTab("listvals")}
+          >
+            List Values ({data.listValuesCount || 0})
+          </button>
+        )}
         <button
           className={`tab-btn ${activeTab === "tokens" ? "active" : ""}`}
           onClick={() => setActiveTab("tokens")}
@@ -199,6 +251,39 @@ function FieldDisplay({ data }) {
                   </td>
                 </tr>
               ))}
+            </tbody>
+          </table>
+        )}
+
+        {activeTab === "listvals" && (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Keyword</th>
+                <th>Display</th>
+                <th>Value</th>
+                <th>Default</th>
+                <th>Seq</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.generatedListValues?.map((lv, idx) => (
+                <tr key={idx}>
+                  <td>{lv.keyword || "-"}</td>
+                  <td>{lv.keyworddisplay || "-"}</td>
+                  <td>{lv.keywordvalue || "-"}</td>
+                  <td>{lv.defaultselected || "False"}</td>
+                  <td>{lv.keyvalsequence || "-"}</td>
+                </tr>
+              ))}
+              {(!data.generatedListValues ||
+                data.generatedListValues.length === 0) && (
+                <tr>
+                  <td colSpan="5" style={{ textAlign: "center" }}>
+                    No list values generated
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         )}
