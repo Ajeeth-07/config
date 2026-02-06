@@ -11,6 +11,164 @@ const { toMarkdownTable } = require("./utils/dataProcessing");
 const { EXCEL_COLUMN_ORDER, EXCEL_COLUMN_WIDTHS } = require("./config");
 
 /**
+ * Normalize a data type value to one of the standardized types:
+ * String, Boolean, DOB, Date, List, Integer, Decimal
+ *
+ * @param {string} raw - Raw data type from AI or input
+ * @param {string} keyword - The keyword name (helps detect DOB vs Date)
+ * @param {string} caption - The caption (helps detect DOB vs Date)
+ * @returns {string} Normalized data type
+ */
+function normalizeDataType(raw, keyword = "", caption = "") {
+  if (!raw) return "String";
+
+  const lower = String(raw).toLowerCase().trim();
+  const kw = String(keyword).toLowerCase();
+  const cap = String(caption).toLowerCase();
+
+  // DOB detection - only for actual date-of-birth fields
+  if (
+    lower === "dob" ||
+    kw.includes("dob") ||
+    kw.includes("date_of_birth") ||
+    kw.includes("dateofbirth") ||
+    cap.includes("date of birth") ||
+    cap.includes("dob")
+  ) {
+    // But not if it's clearly a generic date field that just mentions "birth"
+    if (
+      lower === "dob" ||
+      kw.includes("dob") ||
+      kw.includes("date_of_birth") ||
+      cap.includes("date of birth")
+    ) {
+      return "DOB";
+    }
+  }
+
+  // Date
+  if (lower === "date" || lower === "datetime" || lower === "date/time") {
+    return "Date";
+  }
+
+  // Boolean
+  if (
+    lower === "boolean" ||
+    lower === "bool" ||
+    lower === "yes/no" ||
+    lower === "yesno" ||
+    lower === "true/false" ||
+    lower === "checkbox" ||
+    lower === "flag"
+  ) {
+    return "Boolean";
+  }
+
+  // List (dropdowns, radio buttons, selects, enums)
+  if (
+    lower === "list" ||
+    lower === "dropdown" ||
+    lower === "drop down" ||
+    lower === "select" ||
+    lower === "radio" ||
+    lower === "radio button" ||
+    lower === "radiobutton" ||
+    lower === "enum" ||
+    lower === "multi-select" ||
+    lower === "multiselect" ||
+    lower === "combo" ||
+    lower === "combobox" ||
+    lower === "option" ||
+    lower === "options" ||
+    lower === "picklist"
+  ) {
+    return "List";
+  }
+
+  // Integer
+  if (
+    lower === "integer" ||
+    lower === "int" ||
+    lower === "whole number" ||
+    lower === "long" ||
+    lower === "short"
+  ) {
+    return "Integer";
+  }
+
+  // Decimal
+  if (
+    lower === "decimal" ||
+    lower === "float" ||
+    lower === "double" ||
+    lower === "currency" ||
+    lower === "amount" ||
+    lower === "percentage" ||
+    lower === "percent"
+  ) {
+    return "Decimal";
+  }
+
+  // Number - disambiguate to Integer or Decimal based on context
+  if (lower === "number" || lower === "numeric" || lower === "num") {
+    // Check if caption/keyword hints at decimal
+    if (
+      cap.includes("amount") ||
+      cap.includes("premium") ||
+      cap.includes("price") ||
+      cap.includes("rate") ||
+      cap.includes("percentage") ||
+      cap.includes("height") ||
+      cap.includes("weight") ||
+      cap.includes("bmi") ||
+      kw.includes("amount") ||
+      kw.includes("premium") ||
+      kw.includes("rate")
+    ) {
+      return "Decimal";
+    }
+    return "Integer";
+  }
+
+  // String - catch-all for text types
+  if (
+    lower === "string" ||
+    lower === "text" ||
+    lower === "alpha" ||
+    lower === "alphanumeric" ||
+    lower === "alpha numeric" ||
+    lower === "alpha_numeric" ||
+    lower === "varchar" ||
+    lower === "char" ||
+    lower === "email" ||
+    lower === "phone" ||
+    lower === "url" ||
+    lower === "free text" ||
+    lower === "freetext" ||
+    lower === "na" ||
+    lower === "n/a" ||
+    lower === "textarea"
+  ) {
+    return "String";
+  }
+
+  // If it already matches one of our standard types (case-insensitive)
+  const standardTypes = {
+    string: "String",
+    boolean: "Boolean",
+    dob: "DOB",
+    date: "Date",
+    list: "List",
+    integer: "Integer",
+    decimal: "Decimal",
+  };
+  if (standardTypes[lower]) return standardTypes[lower];
+
+  // Default fallback
+  return "String";
+}
+
+/**
  * Transform AI output to final Excel format with all 33 columns
  * Handles both old format (uniqueIdentifier) and new format (keyword)
  * @param {Array} configs - Array of configuration objects from AI
@@ -19,42 +177,49 @@ const { EXCEL_COLUMN_ORDER, EXCEL_COLUMN_WIDTHS } = require("./config");
 function transformToFinalFormat(configs) {
   const currentDate = getCurrentDate();
 
-  return configs.map((config) => ({
-    keyword: config.keyword || config.uniqueIdentifier || "",
-    keywordcaption: config.keywordcaption || config.label || "",
-    keywordtype: config.keywordtype || config.dataType || "",
-    keyworddatatype: config.keyworddatatype || config.dataType || "",
-    parentkeyword: config.parentkeyword || "",
-    keysequence: config.keysequence || "",
-    defaultvalue: config.defaultvalue || "",
-    ismandatory:
-      config.ismandatory || (config.required === "YES" ? "TRUE" : "FALSE"),
-    inputoroutput: config.inputoroutput || "Input",
-    reversecalctype: config.reversecalctype || "",
-    addonstype: config.addonstype || "",
-    controlgivento: config.controlgivento || "",
-    seporagg: config.seporagg || "",
-    defaultuibehaviour: config.defaultuibehaviour || "Show",
-    maxrepeatercount: config.maxrepeatercount || "",
-    keyminvalue: config.keyminvalue || "",
-    keymaxvalue: config.keymaxvalue || "",
-    minlength: config.minlength || "",
-    maxlength: config.maxlength || "",
-    regex: config.regex || "",
-    lookupcondition: config.lookupcondition || "",
-    addlcondition: config.addlcondition || "",
-    metadata: config.metadata || "",
-    chkfieldsource: config.chkfieldsource || "False",
-    defaultadditionstep: config.defaultadditionstep || "",
-    fromeffectivedate: config.fromeffectivedate || currentDate,
-    toeffectivedate: config.toeffectivedate || "",
-    fromversionid: config.fromversionid || "1",
-    toversionid: config.toversionid || "",
-    keywordsection: config.keywordsection || "",
-    coveragecode: config.coveragecode || "",
-    riskitemcode: config.riskitemcode || "",
-    coverageriskcategory: config.coverageriskcategory || "",
-  }));
+  return configs.map((config) => {
+    const keyword = config.keyword || config.uniqueIdentifier || "";
+    const caption = config.keywordcaption || config.label || "";
+    const rawType = config.keywordtype || config.dataType || "";
+    const normalizedType = normalizeDataType(rawType, keyword, caption);
+
+    return {
+      keyword,
+      keywordcaption: caption,
+      keywordtype: normalizedType,
+      keyworddatatype: normalizedType,
+      parentkeyword: config.parentkeyword || "",
+      keysequence: config.keysequence || "",
+      defaultvalue: config.defaultvalue || "",
+      ismandatory:
+        config.ismandatory || (config.required === "YES" ? "TRUE" : "FALSE"),
+      inputoroutput: config.inputoroutput || "Input",
+      reversecalctype: config.reversecalctype || "",
+      addonstype: config.addonstype || "",
+      controlgivento: config.controlgivento || "",
+      seporagg: config.seporagg || "",
+      defaultuibehaviour: config.defaultuibehaviour || "Show",
+      maxrepeatercount: config.maxrepeatercount || "",
+      keyminvalue: config.keyminvalue || "",
+      keymaxvalue: config.keymaxvalue || "",
+      minlength: config.minlength || "",
+      maxlength: config.maxlength || "",
+      regex: config.regex || "",
+      lookupcondition: config.lookupcondition || "",
+      addlcondition: config.addlcondition || "",
+      metadata: config.metadata || "",
+      chkfieldsource: config.chkfieldsource || "False",
+      defaultadditionstep: config.defaultadditionstep || "",
+      fromeffectivedate: config.fromeffectivedate || currentDate,
+      toeffectivedate: config.toeffectivedate || "",
+      fromversionid: config.fromversionid || "1",
+      toversionid: config.toversionid || "",
+      keywordsection: config.keywordsection || "",
+      coveragecode: config.coveragecode || "",
+      riskitemcode: config.riskitemcode || "",
+      coverageriskcategory: config.coverageriskcategory || "",
+    };
+  });
 }
 
 /**

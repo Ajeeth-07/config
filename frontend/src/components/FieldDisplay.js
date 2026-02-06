@@ -2,6 +2,78 @@ import React, { useState } from "react";
 import axios from "axios";
 import "./FieldDisplay.css";
 
+/**
+ * Gemini 3 Pro pricing (per 1M tokens):
+ *   <= 200k total tokens: $2 input / $12 output
+ *   >  200k total tokens: $4 input / $18 output
+ */
+function calculateCost(promptTokens, completionTokens) {
+  const totalTokens = promptTokens + completionTokens;
+  const isHighTier = totalTokens > 200000;
+
+  const inputRate = isHighTier ? 4.0 : 2.0; // $ per 1M tokens
+  const outputRate = isHighTier ? 18.0 : 12.0; // $ per 1M tokens
+
+  const inputCost = (promptTokens / 1_000_000) * inputRate;
+  const outputCost = (completionTokens / 1_000_000) * outputRate;
+  const totalCost = inputCost + outputCost;
+
+  return {
+    tier: isHighTier ? ">200k" : "<=200k",
+    inputRate,
+    outputRate,
+    inputCost,
+    outputCost,
+    totalCost,
+  };
+}
+
+function PricingBreakdown({ tokenUsage }) {
+  if (!tokenUsage) return null;
+
+  const prompt = tokenUsage.promptTokens || 0;
+  const completion = tokenUsage.completionTokens || 0;
+  const cost = calculateCost(prompt, completion);
+
+  return (
+    <div className="pricing-box">
+      <p className="pricing-title">Estimated Cost (gemini-3-pro-preview)</p>
+      <table className="token-table">
+        <thead>
+          <tr>
+            <th>Component</th>
+            <th>Tokens</th>
+            <th>Rate (per 1M)</th>
+            <th>Cost</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Input (prompt)</td>
+            <td>{prompt.toLocaleString()}</td>
+            <td>${cost.inputRate.toFixed(2)}</td>
+            <td>${cost.inputCost.toFixed(6)}</td>
+          </tr>
+          <tr>
+            <td>Output (completion)</td>
+            <td>{completion.toLocaleString()}</td>
+            <td>${cost.outputRate.toFixed(2)}</td>
+            <td>${cost.outputCost.toFixed(6)}</td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td>Total</td>
+            <td>{(prompt + completion).toLocaleString()}</td>
+            <td className="pricing-tier">Tier: {cost.tier}</td>
+            <td className="pricing-total">${cost.totalCost.toFixed(6)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
 function FieldDisplay({ data }) {
   const [activeTab, setActiveTab] = useState("configs");
   const [downloading, setDownloading] = useState(false);
@@ -133,6 +205,9 @@ function FieldDisplay({ data }) {
 
         {activeTab === "tokens" && (
           <div>
+            {/* Pricing calculator */}
+            <PricingBreakdown tokenUsage={data.tokenUsage} />
+
             <table className="token-table">
               <thead>
                 <tr>
