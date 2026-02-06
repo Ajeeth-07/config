@@ -1,65 +1,66 @@
 /**
  * RAG Configuration
- * Settings for embeddings, vector store, and retrieval
+ * Settings for embeddings, vector store, retrieval, and parent-child hierarchy
  */
+
+/**
+ * Supported Lines of Business
+ */
+const LOB_TYPES = {
+  LIFE: "life",
+  MOTOR: "motor",
+  MARINE: "marine",
+  FIRE: "fire",
+  HEALTH: "health",
+  GENERAL: "general",
+};
 
 const RAG_CONFIG = {
   // Embedding model settings
-  // See: https://ai.google.dev/gemini-api/docs/models/gemini#text-embedding
   EMBEDDING: {
-    MODEL: "text-embedding-004", // Latest Gemini embedding model (768 dimensions)
+    MODEL: "gemini-embedding-001",
     DIMENSIONS: 768,
 
-    // Task types for different operations
     TASK_TYPES: {
-      STORE: "RETRIEVAL_DOCUMENT", // When storing documents in vector DB
-      SEARCH: "RETRIEVAL_QUERY", // When searching for similar documents
-      SIMILARITY: "SEMANTIC_SIMILARITY", // When comparing two texts
-      CLASSIFY: "CLASSIFICATION", // When classifying inputs
-      CLUSTER: "CLUSTERING", // When clustering similar inputs
+      STORE: "RETRIEVAL_DOCUMENT",
+      SEARCH: "RETRIEVAL_QUERY",
+      SIMILARITY: "SEMANTIC_SIMILARITY",
+      CLASSIFY: "CLASSIFICATION",
+      CLUSTER: "CLUSTERING",
     },
   },
 
-  // Vector store settings (file-based)
-  CHROMA: {
-    COLLECTION_NAME: "input_configurations",
-    PERSIST_PATH: "./chroma_db",
+  // Parent-Child retrieval settings
+  PARENT_CHILD: {
+    ENABLE: true,
+    PARENT_SUMMARY_MAX_KEYWORDS: 20, // Top N keywords to include in parent summary
+    CHILD_RESULTS_PER_PARENT: 5, // Max child results returned per parent
   },
 
-  // Chunking settings for large documents
-  CHUNKING: {
-    MAX_CHUNK_SIZE: 500,
-    OVERLAP: 50,
-  },
-
-  // Retrieval settings - RELAXED for cross-insurer semantic matching
-  // "First name" should match "First Name" or "Name of applicant" etc.
+  // Retrieval settings
   RETRIEVAL: {
-    TOP_K: 10, // Number of similar results to retrieve
-    MIN_SIMILARITY: 0.45, // Lower threshold - allows more semantic matches
-    DIRECT_MATCH_THRESHOLD: 0.72, // Lowered - trust embeddings for semantic matching
+    TOP_K: 10,
+    MIN_SIMILARITY: 0.45,
+    DIRECT_MATCH_THRESHOLD: 0.72,
+    PARENT_BOOST: 0.1, // Similarity bonus when query LOB matches parent LOB
   },
 
   // Batch processing for embeddings
   BATCH: {
-    SIZE: 50, // Reduced batch size for stability
-    DELAY_MS: 500, // Faster processing
+    SIZE: 50,
+    DELAY_MS: 500,
   },
 };
 
 // Metadata schema for input configurations
 const INPUT_CONFIG_SCHEMA = {
-  // Required fields
   keyword: { type: "string", required: true },
   keywordcaption: { type: "string", required: true },
   keywordtype: { type: "string", required: true },
-
-  // Optional fields for context
   insurer: { type: "string", required: false },
   product: { type: "string", required: false },
+  lob: { type: "string", required: false },
   category: { type: "string", required: false },
-
-  // Validation fields
   ismandatory: { type: "string", required: false },
   regex: { type: "string", required: false },
   minlength: { type: "string", required: false },
@@ -69,4 +70,5 @@ const INPUT_CONFIG_SCHEMA = {
 module.exports = {
   RAG_CONFIG,
   INPUT_CONFIG_SCHEMA,
+  LOB_TYPES,
 };

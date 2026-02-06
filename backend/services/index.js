@@ -203,6 +203,7 @@ async function processFilesWithProgress(
       const batchRows = sheetData.slice(i, i + BATCH_SIZE);
       const batchNumber = Math.floor(i / BATCH_SIZE) + 1;
       globalBatchCount++;
+      let madeAICall = true; // Track if LLM was called (for rate limiting)
 
       log(
         `  [Batch ${globalBatchCount}] Processing rows ${i + 1}-${Math.min(
@@ -218,12 +219,11 @@ async function processFilesWithProgress(
         if (ragServices && ragStats && ragStats.totalDocuments > 0) {
           // Process with RAG - find similar configs first
           const ragResult = await ragServices.processWithRAG(batchRows, {
-            directMatchThreshold: 0.9,
-            topK: 3,
+            topK: 5,
           });
 
           log(
-            `    RAG: ${ragResult.stats.directMatchCount} direct matches, ${ragResult.stats.needsLLMCount} need LLM`,
+            `    RAG: ${ragResult.stats.directMatchCount} direct, ${ragResult.stats.needsLLMCount} need LLM (${ragResult.stats.ragUtilization} utilization)`,
           );
 
           // Get direct matches from RAG
@@ -233,50 +233,123 @@ async function processFilesWithProgress(
             _similarity: m.similarity,
           }));
 
-          // Process remaining with LLM (with RAG context)
+          // Process remaining with LLM
           if (ragResult.needsLLM.length > 0) {
             const needsLLMRows = ragResult.needsLLM.map(
               (item) => batchRows[item.rowIndex],
             );
 
-            // Build RAG context for LLM
+            // Build rich RAG context for LLM from similar matches
             let ragContext = "";
-            const patterns = new Set();
+            const matchedPatterns = new Map();
+            const matchedParents = new Map();
+
             ragResult.needsLLM.forEach((item) => {
-              if (item.context?.similarConfigs) {
-                item.context.similarConfigs.slice(0, 2).forEach((sim) => {
-                  const key = sim.metadata.keyword;
-                  if (!patterns.has(key)) {
-                    patterns.add(key);
+              if (item.context?.hasContext && item.context?.similarConfigs) {
+                item.context.similarConfigs.slice(0, 3).forEach((sim) => {
+                  const meta = sim.metadata;
+                  const key = meta.keyword;
+                  if (key && !matchedPatterns.has(key)) {
+                    matchedPatterns.set(key, {
+                      keyword: meta.keyword,
+                      keywordcaption: meta.keywordcaption,
+                      keywordtype: meta.keywordtype,
+                      ismandatory: meta.ismandatory,
+                      regex: meta.regex || "",
+                      minlength: meta.minlength || "",
+                      maxlength: meta.maxlength || "",
+                      similarity: sim.similarity,
+                      insurer: meta.insurer,
+                      lob: meta.lob || "general",
+                    });
+                  }
+                  // Collect parent LOB context
+                  if (sim.parent && !matchedParents.has(sim.parent.id)) {
+                    matchedParents.set(sim.parent.id, sim.parent);
                   }
                 });
+
+                // Also collect parent context from the context object
+                if (item.context.parentContext) {
+                  Object.entries(item.context.parentContext).forEach(
+                    ([pid, p]) => {
+                      if (!matchedParents.has(pid)) {
+                        matchedParents.set(pid, p.metadata);
+                      }
+                    },
+                  );
+                }
               }
             });
 
-            if (patterns.size > 0) {
-              ragContext = "## Reference patterns from knowledge base:\n";
+            // Only pass RAG KB context to LLM if we actually found patterns
+            // This controls thinking level: ragContext present = low, absent = high
+            if (matchedPatterns.size > 0) {
+              // Add LOB Context header from parent documents
+              if (matchedParents.size > 0) {
+                ragContext += "## LOB Context (Line of Business):\n";
+                matchedParents.forEach((parent, pid) => {
+                  const lob = parent.lob || "general";
+                  const ins = parent.insurer || "unknown";
+                  const prod = parent.product || "general";
+                  const fc = parent.fieldCount || "";
+                  const cats = parent.fieldCategories
+                    ? parent.fieldCategories.join(", ")
+                    : "";
+                  ragContext += `- ${lob} insurance (${ins}/${prod})`;
+                  if (fc) ragContext += `: ${fc} fields`;
+                  if (cats) ragContext += ` in [${cats}]`;
+                  ragContext += "\n";
+                });
+                ragContext += "\n";
+              }
+
               ragContext +=
-                Array.from(patterns).slice(0, 5).join(", ") + "\n\n";
+                "## Similar fields from knowledge base (follow these naming patterns):\n";
+              ragContext +=
+                "| keyword | caption | type | mandatory | LOB | regex | insurer | similarity |\n";
+              ragContext +=
+                "|---------|---------|------|-----------|-----|-------|---------|------------|\n";
+              Array.from(matchedPatterns.values())
+                .sort(
+                  (a, b) => parseFloat(b.similarity) - parseFloat(a.similarity),
+                )
+                .slice(0, 15)
+                .forEach((p) => {
+                  ragContext += `| ${p.keyword} | ${p.keywordcaption} | ${
+                    p.keywordtype
+                  } | ${p.ismandatory} | ${p.lob} | ${p.regex || "-"} | ${
+                    p.insurer
+                  } | ${p.similarity} |\n`;
+                });
+              ragContext += "\n";
+              log(
+                `    RAG context: ${matchedPatterns.size} patterns, ${matchedParents.size} LOB parent(s) -> thinking: low`,
+              );
+            } else {
+              log(`    RAG: no KB patterns matched -> thinking: high`);
             }
 
-            // Add reference context from context sheets (regex, codes, etc.)
-            const combinedContext = referenceContext + ragContext;
-
+            // ragContext controls thinking level:
+            //   non-empty = RAG has matches = low thinking (fast)
+            //   empty = no KB matches = high thinking (accurate)
+            // sheetRefContext is always passed but does NOT affect thinking level
             const llmResult = await processRowBatch(
               model,
               needsLLMRows,
               sheetName,
               flattenedJson,
               columnHeaders,
-              combinedContext,
+              ragContext,
+              referenceContext, // Sheet reference context (regex, codes) - always passed
             );
 
             // Merge results
             const mergedConfigs = [...directConfigs];
-            llmResult.configs.forEach((config, idx) => {
+            llmResult.configs.forEach((config) => {
               mergedConfigs.push({
                 ...config,
-                _source: "llm",
+                _source: ragContext ? "llm+rag" : "llm",
               });
             });
 
@@ -286,7 +359,8 @@ async function processFilesWithProgress(
               ragStats: ragResult.stats,
             };
           } else {
-            // All configs from RAG direct matches
+            // All configs from RAG direct matches - no LLM call needed
+            madeAICall = false;
             batchResult = {
               configs: directConfigs,
               tokenUsage: {
@@ -298,14 +372,16 @@ async function processFilesWithProgress(
             };
           }
         } else {
-          // Standard processing without RAG (but with reference context from context sheets)
+          // No RAG - standard processing with reference context only
+          // Empty ragContext = high thinking level (no KB guidance)
           batchResult = await processRowBatch(
             model,
             batchRows,
             sheetName,
             flattenedJson,
             columnHeaders,
-            referenceContext, // Pass context from regex/code sheets
+            "", // No RAG context = high thinking
+            referenceContext, // Sheet reference context still passed
           );
         }
 
@@ -344,8 +420,8 @@ async function processFilesWithProgress(
         }
       }
 
-      // Delay between batches (skip if all RAG direct matches)
-      if (i + BATCH_SIZE < rowCount) {
+      // Delay between batches - skip if no LLM call was made
+      if (madeAICall && i + BATCH_SIZE < rowCount) {
         log(
           `  Waiting ${
             CONFIG.DELAY_BETWEEN_BATCHES_MS / 1000

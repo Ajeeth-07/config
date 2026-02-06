@@ -1,18 +1,17 @@
 /**
  * Ingestion Service
  * Handles loading, parsing, and ingesting data into the knowledge base
+ * Supports Parent-Child hierarchy: groups children under LOB parent documents
  */
 
 const fs = require("fs");
 const path = require("path");
 const XLSX = require("xlsx");
-const { addConfigs } = require("./vectorStore");
+const { addConfigs, addParent, makeParentId } = require("./vectorStore");
 const { RAG_CONFIG } = require("./config");
 
 /**
  * Load and parse an Excel file containing input configurations
- * @param {string} filePath - Path to Excel file
- * @returns {Object} Parsed data with sheets
  */
 function loadExcelFile(filePath) {
   const workbook = XLSX.readFile(filePath);
@@ -32,8 +31,6 @@ function loadExcelFile(filePath) {
 
 /**
  * Load and parse a CSV file
- * @param {string} filePath - Path to CSV file
- * @returns {Object[]} Array of row objects
  */
 function loadCsvFile(filePath) {
   const content = fs.readFileSync(filePath, "utf8");
@@ -44,16 +41,11 @@ function loadCsvFile(filePath) {
 
 /**
  * Detect and normalize column names to our standard schema
- * Different insurers may use different column names
- * @param {Object[]} data - Array of row objects
- * @returns {Object[]} Normalized data
  */
 function normalizeColumns(data) {
   if (!data || data.length === 0) return [];
 
-  // Column name mappings (source -> target)
   const columnMappings = {
-    // Keyword variations
     keyword: "keyword",
     uniqueidentifier: "keyword",
     unique_identifier: "keyword",
@@ -63,41 +55,29 @@ function normalizeColumns(data) {
     key: "keyword",
     inputname: "keyword",
     parameter: "keyword",
-
-    // Caption variations
     keywordcaption: "keywordcaption",
     caption: "keywordcaption",
     label: "keywordcaption",
     description: "keywordcaption",
     displayname: "keywordcaption",
     display_name: "keywordcaption",
-
-    // Type variations
     keywordtype: "keywordtype",
     type: "keywordtype",
     datatype: "keywordtype",
     data_type: "keywordtype",
     format: "keywordtype",
-
-    // Mandatory variations
     ismandatory: "ismandatory",
     mandatory: "ismandatory",
     required: "ismandatory",
     is_required: "ismandatory",
-
-    // Regex variations
     regex: "regex",
     pattern: "regex",
     validation: "regex",
     validationpattern: "regex",
-
-    // Length variations
     minlength: "minlength",
     min_length: "minlength",
     maxlength: "maxlength",
     max_length: "maxlength",
-
-    // Value variations
     keyminvalue: "keyminvalue",
     minvalue: "keyminvalue",
     min_value: "keyminvalue",
@@ -118,7 +98,6 @@ function normalizeColumns(data) {
       normalized[targetKey] = value;
     });
 
-    // Normalize mandatory field to TRUE/FALSE
     if (normalized.ismandatory) {
       const val = String(normalized.ismandatory).toLowerCase();
       if (
@@ -140,35 +119,73 @@ function normalizeColumns(data) {
 
 /**
  * Filter out empty or invalid rows
- * @param {Object[]} data - Array of row objects
- * @returns {Object[]} Filtered data
  */
 function filterValidRows(data) {
   return data.filter((row) => {
-    // Must have at least a keyword or field name
     const hasKeyword = row.keyword || row.fieldname || row.field || row.key;
-
-    // Skip completely empty rows
     const hasAnyData = Object.values(row).some(
       (v) => v !== "" && v !== null && v !== undefined,
     );
-
     return hasKeyword && hasAnyData;
   });
 }
 
 /**
- * Ingest an Excel file into the knowledge base
- * @param {string} filePath - Path to Excel file
+ * Build a parent summary from a collection of child configs
+ * @param {Object[]} configs - All normalized child configs for this parent
+ * @param {string} lob - Line of business
  * @param {string} insurer - Insurer name
- * @param {string} product - Product name (optional)
- * @param {Function} onProgress - Progress callback
- * @returns {Promise<Object>} Ingestion result
+ * @param {string} product - Product name
+ * @returns {Object} Parent metadata object
+ */
+function buildParentSummary(configs, lob, insurer, product) {
+  const keywords = configs.map((c) => c.keyword).filter(Boolean);
+
+  const uniqueKeywords = [...new Set(keywords)];
+  const sampleKeywords = uniqueKeywords.slice(
+    0,
+    RAG_CONFIG.PARENT_CHILD.PARENT_SUMMARY_MAX_KEYWORDS,
+  );
+
+  // Derive categories from source sheets
+  const categories = [
+    ...new Set(configs.map((c) => c.sourceSheet).filter(Boolean)),
+  ];
+
+  // Build a readable summary
+  const summaryParts = [`${lob} insurance fields from ${insurer}`];
+  if (product && product !== "general") summaryParts[0] += ` (${product})`;
+  if (categories.length > 0) {
+    summaryParts.push(`sections: ${categories.join(", ")}`);
+  }
+  summaryParts.push(`sample fields: ${sampleKeywords.slice(0, 10).join(", ")}`);
+
+  return {
+    lob,
+    insurer,
+    product,
+    fieldCount: configs.length,
+    sampleKeywords,
+    fieldCategories: categories,
+    summary: summaryParts.join(" | "),
+  };
+}
+
+/**
+ * Ingest an Excel file into the knowledge base
+ * Creates a parent document for the LOB+insurer+product, then adds children.
+ *
+ * @param {string} filePath
+ * @param {string} insurer
+ * @param {string} product
+ * @param {string} lob - Line of Business (defaults to "general")
+ * @param {Function} onProgress
  */
 async function ingestExcelFile(
   filePath,
   insurer,
   product = "general",
+  lob = "general",
   onProgress = null,
 ) {
   const log = (msg) => {
@@ -196,7 +213,6 @@ async function ingestExcelFile(
       const normalized = normalizeColumns(data);
       const filtered = filterValidRows(normalized);
 
-      // Add source sheet info
       filtered.forEach((row) => {
         row.sourceSheet = sheetName;
       });
@@ -212,13 +228,30 @@ async function ingestExcelFile(
 
   log(`Total configurations to ingest: ${allConfigs.length}`);
 
-  // Add to vector store
-  const result = await addConfigs(allConfigs, insurer, product, onProgress);
+  // Build and store parent document
+  const parentSummary = buildParentSummary(allConfigs, lob, insurer, product);
+  log(
+    `Creating parent document: ${lob}/${insurer}/${product} (${parentSummary.fieldCount} fields, ${parentSummary.fieldCategories.length} categories)`,
+  );
+  const parentId = await addParent(parentSummary);
+  log(`Parent created: ${parentId}`);
+
+  // Add children linked to parent
+  const result = await addConfigs(
+    allConfigs,
+    insurer,
+    product,
+    lob,
+    parentId,
+    onProgress,
+  );
 
   return {
     success: true,
     insurer,
     product,
+    lob,
+    parentId,
     configurationsIngested: allConfigs.length,
     ...result,
   };
@@ -226,15 +259,12 @@ async function ingestExcelFile(
 
 /**
  * Ingest from JSON data directly
- * @param {Object[]} configs - Array of configuration objects
- * @param {string} insurer - Insurer name
- * @param {string} product - Product name
- * @param {Function} onProgress - Progress callback
  */
 async function ingestFromJson(
   configs,
   insurer,
   product = "general",
+  lob = "general",
   onProgress = null,
 ) {
   const normalized = normalizeColumns(configs);
@@ -244,12 +274,25 @@ async function ingestFromJson(
     return { success: false, error: "No valid configurations in data" };
   }
 
-  const result = await addConfigs(filtered, insurer, product, onProgress);
+  // Build and store parent document
+  const parentSummary = buildParentSummary(filtered, lob, insurer, product);
+  const parentId = await addParent(parentSummary);
+
+  const result = await addConfigs(
+    filtered,
+    insurer,
+    product,
+    lob,
+    parentId,
+    onProgress,
+  );
 
   return {
     success: true,
     insurer,
     product,
+    lob,
+    parentId,
     configurationsIngested: filtered.length,
     ...result,
   };
@@ -257,19 +300,15 @@ async function ingestFromJson(
 
 /**
  * Ingest the output Excel file we generate (feedback loop)
- * This allows the system to learn from its own outputs
- * @param {string} outputFilePath - Path to generated output Excel
- * @param {string} insurer - Insurer name
- * @param {string} product - Product name
- * @param {Function} onProgress - Progress callback
  */
 async function ingestOutputFile(
   outputFilePath,
   insurer,
   product,
+  lob = "general",
   onProgress = null,
 ) {
-  return ingestExcelFile(outputFilePath, insurer, product, onProgress);
+  return ingestExcelFile(outputFilePath, insurer, product, lob, onProgress);
 }
 
 module.exports = {
@@ -277,6 +316,7 @@ module.exports = {
   loadCsvFile,
   normalizeColumns,
   filterValidRows,
+  buildParentSummary,
   ingestExcelFile,
   ingestFromJson,
   ingestOutputFile,

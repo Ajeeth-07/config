@@ -1,7 +1,7 @@
 /**
  * AI Processing Service
  * Handles interaction with Gemini AI for batch processing
- * Now with RAG enhancement for better accuracy and token savings
+ * With RAG enhancement for better accuracy and token savings
  *
  * Gemini 3 Features:
  * - Thinking Level: Controls reasoning depth (low, medium, high)
@@ -23,6 +23,10 @@ const { CONFIG } = require("./config");
  * @param {string} ragContext - Optional RAG context with similar examples
  * @returns {Object} Object containing configs array and tokenUsage
  */
+/**
+ * @param {string} ragContext - RAG KB context (non-empty = has matches = low thinking)
+ * @param {string} sheetRefContext - Reference context from context sheets (does NOT affect thinking)
+ */
 async function processRowBatch(
   model,
   batchRows,
@@ -30,6 +34,7 @@ async function processRowBatch(
   jsonRef,
   columnHeaders,
   ragContext = "",
+  sheetRefContext = "",
 ) {
   // Convert rows to markdown table for better LLM understanding
   let rowsTable = "| " + columnHeaders.join(" | ") + " |\n";
@@ -45,12 +50,18 @@ async function processRowBatch(
     rowsTable += "| " + values.join(" | ") + " |\n";
   });
 
-  // Build prompt with RAG context if available
+  // Build prompt
   let prompt = "";
 
+  // Add reference context from supporting sheets (regex, codes, etc.)
+  if (sheetRefContext) {
+    prompt += `${sheetRefContext}\n`;
+  }
+
+  // Add RAG knowledge base context if available
   if (ragContext) {
     prompt += `${ragContext}\n`;
-    prompt += `IMPORTANT: Follow the naming patterns and conventions shown in the examples above!\n\n`;
+    prompt += `IMPORTANT: Follow the naming patterns and conventions shown in the knowledge base reference above. Use the same keyword naming style, data types, and validation patterns.\n\n`;
   }
 
   prompt += `Analyze these ${
@@ -79,8 +90,15 @@ Total expected outputs: ${batchRows.length} configurations.
 ## OUTPUT FORMAT - Generate these fields for each row:
 1. keyword: UPPERCASE, underscores, no spaces (e.g., PRODUCT_CODE, INSURED_GENDER)
 2. keywordcaption: Human-readable label/description
-3. keywordtype: STRING|NUMBER|DATE|BOOLEAN|LIST|EMAIL|PHONE|ALPHANUMERIC
-4. keyworddatatype: Same as keywordtype (duplicate for compatibility)
+3. keywordtype: MUST be one of these EXACT values only:
+   - "String" - for text, alpha, alphanumeric, email, phone, PAN, Aadhaar, names, addresses, free text
+   - "Integer" - for whole numbers (age, count, pin code, mobile number)
+   - "Decimal" - for decimal/float numbers (height, weight, percentage, premium amounts)
+   - "Boolean" - for yes/no, true/false, checkbox fields
+   - "DOB" - ONLY for Date of Birth fields specifically
+   - "Date" - for all other date fields (policy date, effective date, expiry date, etc.)
+   - "List" - for dropdowns, radio buttons, select boxes, option lists, enums, multi-select
+4. keyworddatatype: MUST be the same value as keywordtype (use the exact same standardized value)
 5. ismandatory: TRUE or FALSE (based on required/mandatory column)
 6. inputoroutput: "System", "Input", or "Output" (default to "Input" if unclear)
 7. defaultuibehaviour: "Show" or "Hide" (default to "Show")
@@ -115,8 +133,8 @@ Return ONLY a JSON array with ${batchRows.length} objects in this exact format:
 }]`;
 
   // Determine thinking level based on whether RAG context is provided
-  // With RAG context, we can use lower thinking as context provides guidance
-  // Without RAG, use higher thinking for better reasoning
+  // With RAG context, model has reference patterns - use low thinking for speed
+  // Without RAG, use high thinking for deep reasoning
   const thinkingLevel = ragContext
     ? CONFIG.THINKING_LEVEL_WITH_RAG_CONTEXT
     : CONFIG.THINKING_LEVEL;
@@ -186,7 +204,7 @@ async function processRowBatchWithRAG(
     totalTokens: 0,
   };
 
-  // First, add all direct matches from RAG
+  // Direct matches from RAG - skip LLM entirely
   ragResult.directMatches.forEach((match) => {
     allConfigs[match.rowIndex] = {
       ...match.config,
@@ -195,111 +213,77 @@ async function processRowBatchWithRAG(
     };
   });
 
-  // Then process rows that need LLM
+  // Process remaining rows through LLM with RAG context
   if (ragResult.needsLLM.length > 0) {
-    const needsLLMRows = ragResult.needsLLM.map(
-      (item) => batchRows[item.rowIndex],
-    );
+    const rows = ragResult.needsLLM.map((item) => batchRows[item.rowIndex]);
 
-    // Build RAG context from similar examples
+    // Build RAG context
     let ragContext = "";
-    const hasContext = ragResult.needsLLM.some(
-      (item) => item.context?.hasContext,
-    );
+    const contexts = ragResult.contexts;
+    const patterns = new Set();
 
-    if (hasContext) {
-      ragContext =
-        "## REFERENCE: Similar configurations from knowledge base\n\n";
-      ragContext += "| Keyword | Caption | Type | Mandatory |\n";
-      ragContext += "|---------|---------|------|----------|\n";
+    ragResult.needsLLM.forEach((item) => {
+      const ctx = contexts.get(item.rowIndex);
+      if (ctx?.hasContext) {
+        ctx.similarConfigs.forEach((sim) => {
+          patterns.add(
+            JSON.stringify({
+              keyword: sim.metadata.keyword,
+              keywordcaption: sim.metadata.keywordcaption,
+              keywordtype: sim.metadata.keywordtype,
+            }),
+          );
+        });
+      }
+    });
 
-      const seenPatterns = new Set();
-      ragResult.needsLLM.forEach((item) => {
-        if (item.context?.similarConfigs) {
-          item.context.similarConfigs.slice(0, 2).forEach((sim) => {
-            const key = sim.metadata.keyword;
-            if (!seenPatterns.has(key)) {
-              seenPatterns.add(key);
-              ragContext += `| ${sim.metadata.keyword} | ${sim.metadata.keywordcaption} | ${sim.metadata.keywordtype} | ${sim.metadata.ismandatory} |\n`;
-            }
-          });
-        }
-      });
-      ragContext += "\n";
+    if (patterns.size > 0) {
+      ragContext = "## Reference patterns from knowledge base:\n";
+      ragContext +=
+        Array.from(patterns)
+          .slice(0, 10)
+          .map((p) => {
+            const obj = JSON.parse(p);
+            return `- ${obj.keyword}: ${obj.keywordcaption} (${obj.keywordtype})`;
+          })
+          .join("\n") + "\n\n";
     }
 
-    // Process with LLM
-    const llmResult = await processRowBatch(
+    const result = await processRowBatch(
       model,
-      needsLLMRows,
+      rows,
       sheetName,
       jsonRef,
       columnHeaders,
       ragContext,
     );
 
-    totalTokenUsage = llmResult.tokenUsage;
-
-    // Map LLM results back to correct indices
-    llmResult.configs.forEach((config, llmIdx) => {
-      const originalIdx = ragResult.needsLLM[llmIdx].rowIndex;
-      allConfigs[originalIdx] = {
-        ...config,
-        _source: "llm",
-      };
+    result.configs.forEach((config, idx) => {
+      const originalIdx = ragResult.needsLLM[idx].rowIndex;
+      allConfigs[originalIdx] = config;
     });
+
+    totalTokenUsage = result.tokenUsage;
   }
 
-  // Fill any gaps and convert sparse array to dense
-  const finalConfigs = [];
-  for (let i = 0; i < batchRows.length; i++) {
-    if (allConfigs[i]) {
-      finalConfigs.push(allConfigs[i]);
-    }
-  }
-
+  // Filter nulls and return
   return {
-    configs: finalConfigs,
+    configs: allConfigs.filter(Boolean),
     tokenUsage: totalTokenUsage,
-    ragStats: ragResult.stats,
   };
 }
 
 /**
- * Log processing summary before starting batch processing
- * @param {Object} params - Processing parameters
+ * Log processing summary for a batch
+ * @param {number} batchNum - Batch number
+ * @param {Object} tokenUsage - Token usage stats
+ * @param {number} configCount - Number of configs generated
  */
-function logProcessingSummary({
-  model,
-  totalRows,
-  batchSize,
-  delayBetweenBatches,
-  ragEnabled = false,
-}) {
-  const estimatedBatches = Math.ceil(totalRows / batchSize);
-  const estimatedTime = (estimatedBatches * delayBetweenBatches) / 1000;
-
-  console.log(`\n📊 Processing Summary:`);
-  console.log(`   Model: ${model}`);
-  console.log(`   Total input fields (rows): ${totalRows}`);
-  console.log(`   Batch size: ${batchSize} rows per request`);
-  console.log(`   Estimated batches/requests: ${estimatedBatches}`);
+function logProcessingSummary(batchNum, tokenUsage, configCount) {
+  console.log(`  Batch ${batchNum}: ${configCount} configs generated`);
   console.log(
-    `   Estimated processing time: ~${Math.ceil(estimatedTime / 60)} minutes`,
+    `    Tokens: ${tokenUsage.promptTokens} prompt + ${tokenUsage.completionTokens} completion = ${tokenUsage.totalTokens} total`,
   );
-  console.log(`   Delay between batches: ${delayBetweenBatches / 1000}s`);
-  console.log(`   RAG Enhancement: ${ragEnabled ? "ENABLED" : "Disabled"}`);
-
-  // Warning if exceeding free tier limits
-  if (estimatedBatches > 20 && !ragEnabled) {
-    console.log(
-      `\n⚠️  WARNING: This will require ~${estimatedBatches} API requests.`,
-    );
-    console.log(`   Gemini 3 Free Tier limit: 20 requests/day`);
-    console.log(`   Consider enabling RAG or increasing BATCH_SIZE.\n`);
-  }
-
-  return { estimatedBatches, estimatedTime };
 }
 
 module.exports = {

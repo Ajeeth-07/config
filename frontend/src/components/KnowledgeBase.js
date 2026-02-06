@@ -4,11 +4,21 @@ import "./KnowledgeBase.css";
 
 const BACKEND_URL = "http://localhost:5000";
 
+const LOB_OPTIONS = [
+  { value: "general", label: "General" },
+  { value: "life", label: "Life Insurance" },
+  { value: "motor", label: "Motor Insurance" },
+  { value: "marine", label: "Marine Insurance" },
+  { value: "fire", label: "Fire Insurance" },
+  { value: "health", label: "Health Insurance" },
+];
+
 function KnowledgeBase() {
   const [stats, setStats] = useState(null);
   const [file, setFile] = useState(null);
   const [insurer, setInsurer] = useState("");
   const [product, setProduct] = useState("");
+  const [lob, setLob] = useState("general");
   const [isIngesting, setIsIngesting] = useState(false);
   const [logs, setLogs] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -65,6 +75,7 @@ function KnowledgeBase() {
     formData.append("file", file);
     formData.append("insurer", insurer);
     formData.append("product", product || "general");
+    formData.append("lob", lob);
     formData.append("sessionId", sessionId);
 
     try {
@@ -124,9 +135,26 @@ function KnowledgeBase() {
             <strong>Documents:</strong> {stats?.totalDocuments || 0}
           </div>
           <div className="stat-item">
+            <strong>Parents:</strong> {stats?.totalParents || 0}
+          </div>
+          <div className="stat-item">
             <strong>Insurers:</strong> {stats?.insurers?.join(", ") || "None"}
           </div>
+          <div className="stat-item">
+            <strong>LOBs:</strong> {stats?.lobs?.join(", ") || "None"}
+          </div>
         </div>
+
+        {/* LOB Breakdown */}
+        {stats?.lobBreakdown && Object.keys(stats.lobBreakdown).length > 0 && (
+          <div className="kb-lob-breakdown">
+            {Object.entries(stats.lobBreakdown).map(([lobName, count]) => (
+              <span key={lobName} className="lob-chip">
+                {lobName}: {count}
+              </span>
+            ))}
+          </div>
+        )}
 
         {/* Ingest Form */}
         <div className="kb-section">
@@ -161,6 +189,21 @@ function KnowledgeBase() {
                 placeholder="e.g., TERM, ULIP"
                 disabled={isIngesting}
               />
+            </div>
+            <div className="form-row">
+              <label>Line of Business:</label>
+              <select
+                value={lob}
+                onChange={(e) => setLob(e.target.value)}
+                disabled={isIngesting}
+                className="lob-select"
+              >
+                {LOB_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
             </div>
             <div className="form-row">
               <button
@@ -224,6 +267,7 @@ function KnowledgeBase() {
                     <th>Caption</th>
                     <th>Type</th>
                     <th>Insurer</th>
+                    <th>LOB</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -234,6 +278,7 @@ function KnowledgeBase() {
                       <td>{r.metadata?.keywordcaption}</td>
                       <td>{r.metadata?.keywordtype}</td>
                       <td>{r.metadata?.insurer}</td>
+                      <td>{r.metadata?.lob || "-"}</td>
                     </tr>
                   ))}
                 </tbody>

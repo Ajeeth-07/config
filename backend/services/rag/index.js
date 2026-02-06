@@ -1,19 +1,24 @@
 /**
  * RAG Module - Main Entry Point
- * Exports all RAG-related functionality
+ * Exports all RAG-related functionality (Parent-Child hierarchy)
  */
 
-const { RAG_CONFIG, INPUT_CONFIG_SCHEMA } = require("./config");
+const { RAG_CONFIG, INPUT_CONFIG_SCHEMA, LOB_TYPES } = require("./config");
 const {
   embedText,
   embedBatch,
   configToSearchableText,
+  parentToSearchableText,
   cosineSimilarity,
 } = require("./embeddingService");
 const {
   initVectorStore,
   getCollection,
   addConfigs,
+  addParent,
+  getParent,
+  getAllParents,
+  makeParentId,
   searchSimilar,
   findSimilarConfigs,
   getStats,
@@ -25,6 +30,7 @@ const {
   loadCsvFile,
   normalizeColumns,
   filterValidRows,
+  buildParentSummary,
   ingestExcelFile,
   ingestFromJson,
   ingestOutputFile,
@@ -42,17 +48,23 @@ module.exports = {
   // Configuration
   RAG_CONFIG,
   INPUT_CONFIG_SCHEMA,
+  LOB_TYPES,
 
   // Embedding
   embedText,
   embedBatch,
   configToSearchableText,
+  parentToSearchableText,
   cosineSimilarity,
 
   // Vector Store
   initVectorStore,
   getCollection,
   addConfigs,
+  addParent,
+  getParent,
+  getAllParents,
+  makeParentId,
   searchSimilar,
   findSimilarConfigs,
   getStats,
@@ -64,6 +76,7 @@ module.exports = {
   loadCsvFile,
   normalizeColumns,
   filterValidRows,
+  buildParentSummary,
   ingestExcelFile,
   ingestFromJson,
   ingestOutputFile,

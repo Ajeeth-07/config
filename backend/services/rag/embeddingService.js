@@ -138,21 +138,87 @@ function getValueByKeys(obj, keys) {
 }
 
 /**
+ * Values that are clearly data types, NOT labels/field names
+ * Used to avoid misidentifying a data type column value as a field name
+ */
+const DATA_TYPE_VALUES = new Set([
+  "alpha",
+  "numeric",
+  "alphanumeric",
+  "alpha numeric",
+  "string",
+  "number",
+  "date",
+  "boolean",
+  "list",
+  "email",
+  "phone",
+  "text",
+  "integer",
+  "float",
+  "decimal",
+  "na",
+  "n/a",
+  "dropdown",
+  "checkbox",
+  "radio",
+  "textarea",
+  "free text",
+  "freetext",
+  "yes/no",
+]);
+
+/**
+ * Check if a value looks like a data type rather than a meaningful label
+ */
+function isDataTypeValue(val) {
+  if (!val) return false;
+  const lower = String(val).toLowerCase().trim();
+  return DATA_TYPE_VALUES.has(lower) || lower.length < 3;
+}
+
+/**
  * Create a searchable text representation of an input configuration
- * Handles varied column names from different insurers' mapping sheets
- * Focus on SEMANTIC content, not insurer-specific metadata
+ * PRIORITY: Label/Caption is the MOST important field for semantic matching
+ * across different insurers. "First Name" from Kotak should match "First Name" from IPRU.
+ *
  * @param {Object} config - Input configuration object (from KB or input row)
  * @returns {string} Searchable text optimized for semantic matching
  */
 function configToSearchableText(config) {
   const parts = [];
 
-  // Field name/identifier - try multiple possible column names
+  // PRIORITY 1: Label/Caption/Description - this is the PRIMARY matching signal
+  // "Gender", "First Name", "PAN Number", "Date of Birth" etc.
+  // This is what makes semantic matching work across insurers
+  const label = getValueByKeys(config, [
+    "keywordcaption",
+    "KeywordCaption",
+    "Label",
+    "label",
+    "Caption",
+    "caption",
+    "Description",
+    "description",
+    "Display",
+    "DisplayName",
+    "display_name",
+    "Title",
+    "title",
+    "Question",
+    "question",
+    "Health Details", // ICICI health sheets
+    "Hazardous Question",
+    "desc",
+  ]);
+  if (label) parts.push(`Label: ${label}`);
+
+  // PRIORITY 2: Field name/identifier (keyword, field name, JSON tag)
+  // But ONLY if it looks like an actual field name, not a data type
   const fieldName = getValueByKeys(config, [
     "keyword",
     "Keyword",
     "KEYWORD",
-    "Field",
     "FieldName",
     "field_name",
     "fieldname",
@@ -165,51 +231,36 @@ function configToSearchableText(config) {
     "InputName",
     "input_name",
     "inputname",
-    "Name",
-    "name",
     "uniqueIdentifier",
     "UniqueIdentifier",
+    "JSON Tag",
+    "JSON Tags",
+    "jsonTag",
     "Key",
     "key",
+    "Code", // Question codes like HQ01, HZQ1
     "Column",
     "column",
     "Attribute",
     "attribute",
+    "Field",
   ]);
-  if (fieldName) parts.push(`Field: ${fieldName}`);
+  // Only use fieldName if it doesn't look like a data type value
+  if (fieldName && !isDataTypeValue(fieldName)) {
+    parts.push(`Field: ${fieldName}`);
+  }
 
-  // Label/Caption/Description - semantic meaning
-  const label = getValueByKeys(config, [
-    "keywordcaption",
-    "KeywordCaption",
-    "Label",
-    "label",
-    "Caption",
-    "caption",
-    "Description",
-    "description",
-    "desc",
-    "Display",
-    "DisplayName",
-    "display_name",
-    "Title",
-    "title",
-    "Question",
-    "question", // For questionnaire sheets
-  ]);
-  if (label) parts.push(`Label: ${label}`);
-
-  // Data type - important for matching similar fields
+  // Data type
   const dataType = getValueByKeys(config, [
     "keywordtype",
     "KeywordType",
     "keyworddatatype",
     "KeywordDataType",
-    "Type",
-    "type",
     "DataType",
     "dataType",
     "data_type",
+    "Type",
+    "type",
     "Format",
     "format",
     "InputType",
@@ -229,27 +280,27 @@ function configToSearchableText(config) {
     "required",
     "Mandatory",
     "mandatory",
-    "M/O", // Common in insurance sheets
-    "Optional",
-    "optional", // Inverse
+    "M/O",
   ]);
   if (mandatory) parts.push(`Mandatory: ${mandatory}`);
 
-  // Validation - regex pattern
+  // Validation - regex pattern (truncate long patterns)
   const regex = getValueByKeys(config, [
     "regex",
     "Regex",
     "REGEX",
-    "Pattern",
-    "pattern",
     "Validation",
     "validation",
     "ValidationPattern",
     "validation_pattern",
   ]);
-  if (regex) parts.push(`Pattern: ${regex}`);
+  if (regex) {
+    // Truncate very long regex patterns - the field name matters more
+    const truncated = String(regex).substring(0, 60);
+    parts.push(`Pattern: ${truncated}`);
+  }
 
-  // List values for dropdowns - IMPORTANT for matching similar dropdowns
+  // List values for dropdowns
   const listValues = getValueByKeys(config, [
     "listValues",
     "ListValues",
@@ -257,82 +308,83 @@ function configToSearchableText(config) {
     "values",
     "Options",
     "options",
-    "Master",
-    "master", // Common in insurance for master data
     "Dropdown",
     "dropdown",
     "Choices",
     "choices",
-    "Enum",
-    "enum",
   ]);
-  if (listValues) parts.push(`Options: ${listValues}`);
+  if (listValues) {
+    const truncated = String(listValues).substring(0, 80);
+    parts.push(`Options: ${truncated}`);
+  }
 
-  // Min/Max constraints
-  const minVal = getValueByKeys(config, [
-    "keyminvalue",
-    "MinValue",
-    "minvalue",
-    "Min",
-    "min",
-  ]);
-  const maxVal = getValueByKeys(config, [
-    "keymaxvalue",
-    "MaxValue",
-    "maxvalue",
-    "Max",
-    "max",
-  ]);
-  const minLen = getValueByKeys(config, [
-    "minlength",
-    "MinLength",
-    "minlength",
-    "MinLen",
-  ]);
-  const maxLen = getValueByKeys(config, [
-    "maxlength",
-    "MaxLength",
-    "maxlength",
-    "MaxLen",
-  ]);
-
-  if (minVal) parts.push(`MinValue: ${minVal}`);
-  if (maxVal) parts.push(`MaxValue: ${maxVal}`);
-  if (minLen) parts.push(`MinLength: ${minLen}`);
-  if (maxLen) parts.push(`MaxLength: ${maxLen}`);
-
-  // Category/Section - helps match similar fields
-  const category = getValueByKeys(config, [
-    "category",
-    "Category",
-    "Section",
-    "section",
-    "Group",
-    "group",
-    "Tab",
-    "tab",
-    "Panel",
-    "panel",
-    "sourceSheet", // From our ingestion
-  ]);
-  if (category) parts.push(`Category: ${category}`);
-
-  // If we found nothing, try to use ALL values from the row
+  // If we have NO label and NO field name, try to find the most descriptive
+  // non-empty value in the row (likely the label in an unknown column)
   if (parts.length === 0) {
-    // Last resort: concatenate all non-empty values
+    // Look for the longest string value that isn't a data type or number
+    let bestValue = null;
+    let bestLength = 0;
+
+    Object.entries(config).forEach(([key, val]) => {
+      if (val === undefined || val === null || val === "") return;
+      const strVal = String(val).trim();
+      // Skip short values, numbers, and common non-label values
+      if (strVal.length < 3 || strVal.length > 200) return;
+      if (/^\d+$/.test(strVal)) return; // Pure numbers
+      if (isDataTypeValue(strVal)) return;
+      // Prefer longer descriptive strings
+      if (strVal.length > bestLength) {
+        bestLength = strVal.length;
+        bestValue = strVal;
+      }
+    });
+
+    if (bestValue) {
+      parts.push(`Label: ${bestValue}`);
+    }
+
+    // Also add all other short values as supplementary info
     Object.values(config).forEach((val) => {
-      if (
-        val !== undefined &&
-        val !== null &&
-        val !== "" &&
-        typeof val !== "object"
-      ) {
-        const strVal = String(val).trim();
-        if (strVal.length > 0 && strVal.length < 200) {
+      if (val === undefined || val === null || val === "") return;
+      const strVal = String(val).trim();
+      if (strVal.length >= 3 && strVal.length < 100 && strVal !== bestValue) {
+        if (!isDataTypeValue(strVal) && !/^\d+$/.test(strVal)) {
           parts.push(strVal);
         }
       }
     });
+  }
+
+  return parts.join(" | ");
+}
+
+/**
+ * Create a searchable text representation of a PARENT document (LOB schema).
+ * Used for embedding the parent so we can optionally search at the parent level.
+ * @param {Object} parentMeta - Parent metadata object
+ * @returns {string} Searchable text for the parent document
+ */
+function parentToSearchableText(parentMeta) {
+  const parts = [];
+
+  if (parentMeta.lob) parts.push(`LOB: ${parentMeta.lob}`);
+  if (parentMeta.insurer) parts.push(`Insurer: ${parentMeta.insurer}`);
+  if (parentMeta.product) parts.push(`Product: ${parentMeta.product}`);
+
+  if (parentMeta.fieldCategories && parentMeta.fieldCategories.length > 0) {
+    parts.push(`Categories: ${parentMeta.fieldCategories.join(", ")}`);
+  }
+
+  if (parentMeta.sampleKeywords && parentMeta.sampleKeywords.length > 0) {
+    parts.push(`Fields: ${parentMeta.sampleKeywords.join(", ")}`);
+  }
+
+  if (parentMeta.summary) {
+    parts.push(parentMeta.summary);
+  }
+
+  if (parentMeta.fieldCount) {
+    parts.push(`Total fields: ${parentMeta.fieldCount}`);
   }
 
   return parts.join(" | ");
@@ -368,5 +420,6 @@ module.exports = {
   embedText,
   embedBatch,
   configToSearchableText,
+  parentToSearchableText,
   cosineSimilarity,
 };

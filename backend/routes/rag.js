@@ -1,6 +1,6 @@
 /**
  * RAG Routes
- * API endpoints for knowledge base management
+ * API endpoints for knowledge base management (Parent-Child hierarchy)
  */
 
 const express = require("express");
@@ -22,7 +22,14 @@ const {
 } = require("../services/rag");
 
 // Import export function directly
-const { exportData, DATA_DIR } = require("../services/rag/vectorStore");
+const {
+  exportData,
+  DATA_DIR,
+  getAllParents,
+  getParent,
+} = require("../services/rag/vectorStore");
+
+const { LOB_TYPES } = require("../services/rag/config");
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -96,7 +103,7 @@ router.post("/init", async (req, res) => {
 });
 
 /**
- * Get knowledge base statistics
+ * Get knowledge base statistics (now includes LOB breakdown and parents)
  */
 router.get("/stats", async (req, res) => {
   try {
@@ -108,7 +115,70 @@ router.get("/stats", async (req, res) => {
 });
 
 /**
+ * Get valid LOB types
+ */
+router.get("/lob-types", (req, res) => {
+  res.json({
+    lobTypes: Object.values(LOB_TYPES),
+    description:
+      "Supported Lines of Business. Pass one of these as the 'lob' parameter during ingestion.",
+  });
+});
+
+// -------------------------------------------------------------------------
+// Parent endpoints
+// -------------------------------------------------------------------------
+
+/**
+ * Get all parent documents (LOB schemas)
+ */
+router.get("/parents", async (req, res) => {
+  try {
+    const parents = getAllParents();
+    res.json({
+      count: parents.length,
+      parents: parents.map((p) => ({
+        id: p.id,
+        lob: p.metadata.lob,
+        insurer: p.metadata.insurer,
+        product: p.metadata.product,
+        fieldCount: p.metadata.fieldCount,
+        fieldCategories: p.metadata.fieldCategories,
+        sampleKeywords: p.metadata.sampleKeywords,
+        summary: p.metadata.summary,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Get a specific parent and summary
+ */
+router.get("/parent/:id", async (req, res) => {
+  try {
+    const parent = getParent(req.params.id);
+    if (!parent) {
+      return res.status(404).json({ error: "Parent not found" });
+    }
+    res.json({
+      id: parent.id,
+      ...parent.metadata,
+      document: parent.document,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// -------------------------------------------------------------------------
+// Ingestion endpoints (with LOB param)
+// -------------------------------------------------------------------------
+
+/**
  * Upload and ingest training data
+ * Now accepts optional `lob` parameter
  */
 router.post("/ingest", upload.single("file"), async (req, res) => {
   const sessionId = req.body.sessionId || Date.now().toString();
@@ -118,7 +188,7 @@ router.post("/ingest", upload.single("file"), async (req, res) => {
       return res.status(400).json({ error: "No file uploaded" });
     }
 
-    const { insurer, product } = req.body;
+    const { insurer, product, lob } = req.body;
 
     if (!insurer) {
       return res.status(400).json({ error: "Insurer name is required" });
@@ -130,6 +200,7 @@ router.post("/ingest", upload.single("file"), async (req, res) => {
       req.file.path,
       insurer,
       product || "general",
+      lob || "general",
       (msg) => sendProgress(sessionId, msg),
     );
 
@@ -153,11 +224,11 @@ router.post("/ingest", upload.single("file"), async (req, res) => {
 });
 
 /**
- * Ingest from JSON data
+ * Ingest from JSON data (with LOB param)
  */
 router.post("/ingest-json", async (req, res) => {
   try {
-    const { configs, insurer, product } = req.body;
+    const { configs, insurer, product, lob } = req.body;
 
     if (!configs || !Array.isArray(configs)) {
       return res.status(400).json({ error: "configs array is required" });
@@ -167,19 +238,28 @@ router.post("/ingest-json", async (req, res) => {
       return res.status(400).json({ error: "insurer is required" });
     }
 
-    const result = await ingestFromJson(configs, insurer, product || "general");
+    const result = await ingestFromJson(
+      configs,
+      insurer,
+      product || "general",
+      lob || "general",
+    );
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// -------------------------------------------------------------------------
+// Search
+// -------------------------------------------------------------------------
+
 /**
- * Search for similar configurations
+ * Search for similar configurations (with optional LOB filter for boost)
  */
 router.post("/search", async (req, res) => {
   try {
-    const { query, topK, insurer, minSimilarity } = req.body;
+    const { query, topK, lob, minSimilarity } = req.body;
 
     if (!query) {
       return res.status(400).json({ error: "query is required" });
@@ -187,7 +267,7 @@ router.post("/search", async (req, res) => {
 
     const results = await searchSimilar(query, {
       topK: topK || 10,
-      insurer: insurer || null,
+      lob: lob || null,
       minSimilarity: minSimilarity || 0.6,
     });
 
@@ -200,6 +280,10 @@ router.post("/search", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// -------------------------------------------------------------------------
+// Delete
+// -------------------------------------------------------------------------
 
 /**
  * Clear all data from knowledge base
@@ -225,16 +309,26 @@ router.delete("/insurer/:insurer", async (req, res) => {
   }
 });
 
+// -------------------------------------------------------------------------
+// Export / View
+// -------------------------------------------------------------------------
+
 /**
- * Export/View all data from knowledge base
- * This acts as a simple "GUI" to inspect the data
+ * Export/View all data from knowledge base (parent-child aware)
  */
 router.get("/export", async (req, res) => {
   try {
     const data = exportData();
 
-    // If format=html, return a simple HTML page
     if (req.query.format === "html") {
+      // Group children by parent
+      const grouped = {};
+      data.configs.forEach((config) => {
+        const pid = config.parentId || "unassigned";
+        if (!grouped[pid]) grouped[pid] = [];
+        grouped[pid].push(config);
+      });
+
       let html = `
 <!DOCTYPE html>
 <html>
@@ -242,52 +336,85 @@ router.get("/export", async (req, res) => {
   <title>RAG Knowledge Base Viewer</title>
   <style>
     body { font-family: monospace; background: #c0c0c0; padding: 20px; }
-    h1 { color: navy; }
+    h1, h2, h3 { color: navy; }
     table { border-collapse: collapse; width: 100%; background: white; }
     th, td { border: 1px solid #808080; padding: 8px; text-align: left; font-size: 12px; }
     th { background: navy; color: white; }
     tr:nth-child(even) { background: #f0f0f0; }
     .stats { background: white; padding: 10px; margin-bottom: 20px; border: 2px inset; }
     .truncate { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .parent-block { margin: 20px 0; padding: 10px; background: white; border: 2px outset; }
+    .parent-header { background: #000080; color: white; padding: 8px; margin: -10px -10px 10px -10px; }
+    .lob-badge { display: inline-block; background: darkred; color: white; padding: 2px 8px; font-size: 11px; margin-left: 8px; }
   </style>
 </head>
 <body>
   <h1>RAG Knowledge Base Viewer</h1>
   <div class="stats">
-    <strong>Total Documents:</strong> ${data.count}<br>
+    <strong>Total Children:</strong> ${data.count} |
+    <strong>Total Parents:</strong> ${data.parentCount} |
     <strong>Data Directory:</strong> ${DATA_DIR}
   </div>
-  <table>
-    <tr>
-      <th>#</th>
-      <th>Keyword</th>
-      <th>Caption</th>
-      <th>Type</th>
-      <th>Insurer</th>
-      <th>Product</th>
-      <th>Mandatory</th>
-      <th>Document (searchable text)</th>
-    </tr>`;
 
-      data.configs.forEach((config, idx) => {
+  <h2>Parents (LOB Schemas)</h2>
+  <table>
+    <tr><th>ID</th><th>LOB</th><th>Insurer</th><th>Product</th><th>Fields</th><th>Categories</th></tr>`;
+
+      data.parents.forEach((p) => {
         html += `
     <tr>
-      <td>${idx + 1}</td>
-      <td>${config.keyword || ""}</td>
-      <td>${config.keywordcaption || ""}</td>
-      <td>${config.keywordtype || ""}</td>
-      <td>${config.insurer || ""}</td>
-      <td>${config.product || ""}</td>
-      <td>${config.ismandatory || ""}</td>
-      <td class="truncate" title="${(config.document || "").replace(
-        /"/g,
-        "&quot;",
-      )}">${config.document || ""}</td>
+      <td>${p.id || ""}</td>
+      <td>${p.lob || ""}</td>
+      <td>${p.insurer || ""}</td>
+      <td>${p.product || ""}</td>
+      <td>${p.fieldCount || 0}</td>
+      <td>${(p.fieldCategories || []).join(", ")}</td>
     </tr>`;
       });
 
       html += `
   </table>
+
+  <h2>Children (by Parent)</h2>`;
+
+      Object.entries(grouped).forEach(([parentId, configs]) => {
+        const parent = data.parents.find((p) => p.id === parentId);
+        const lobLabel = parent ? parent.lob : "unknown";
+
+        html += `
+  <div class="parent-block">
+    <div class="parent-header">
+      ${parentId} <span class="lob-badge">${lobLabel}</span> (${configs.length} fields)
+    </div>
+    <table>
+      <tr>
+        <th>#</th><th>Keyword</th><th>Caption</th><th>Type</th>
+        <th>Insurer</th><th>Mandatory</th><th>LOB</th><th>Document</th>
+      </tr>`;
+
+        configs.forEach((config, idx) => {
+          html += `
+      <tr>
+        <td>${idx + 1}</td>
+        <td>${config.keyword || ""}</td>
+        <td>${config.keywordcaption || ""}</td>
+        <td>${config.keywordtype || ""}</td>
+        <td>${config.insurer || ""}</td>
+        <td>${config.ismandatory || ""}</td>
+        <td>${config.lob || ""}</td>
+        <td class="truncate" title="${(config.document || "").replace(
+          /"/g,
+          "&quot;",
+        )}">${config.document || ""}</td>
+      </tr>`;
+        });
+
+        html += `
+    </table>
+  </div>`;
+      });
+
+      html += `
 </body>
 </html>`;
 
@@ -321,15 +448,25 @@ router.get("/download", async (req, res) => {
 });
 
 /**
- * View raw embeddings (vectors) - shows the actual numbers
- * This demonstrates how text is converted to numerical vectors
+ * View raw embeddings (vectors) - now reads from child_vectors.json
  */
 router.get("/vectors", async (req, res) => {
   try {
-    const vectorsFile = path.join(DATA_DIR, "vectors.json");
-    const metadataFile = path.join(DATA_DIR, "metadata.json");
+    const vectorsFile = path.join(DATA_DIR, "child_vectors.json");
+    const metadataFile = path.join(DATA_DIR, "child_metadata.json");
 
-    if (!fs.existsSync(vectorsFile)) {
+    // Fallback to legacy paths
+    const legacyVectors = path.join(DATA_DIR, "vectors.json");
+    const legacyMeta = path.join(DATA_DIR, "metadata.json");
+
+    let vFile = vectorsFile;
+    let mFile = metadataFile;
+    if (!fs.existsSync(vFile) && fs.existsSync(legacyVectors)) {
+      vFile = legacyVectors;
+      mFile = legacyMeta;
+    }
+
+    if (!fs.existsSync(vFile)) {
       return res.json({
         message: "No data yet. Ingest some documents first.",
         count: 0,
@@ -337,10 +474,9 @@ router.get("/vectors", async (req, res) => {
       });
     }
 
-    const vectors = JSON.parse(fs.readFileSync(vectorsFile, "utf8"));
-    const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf8"));
+    const vectors = JSON.parse(fs.readFileSync(vFile, "utf8"));
+    const metadata = JSON.parse(fs.readFileSync(mFile, "utf8"));
 
-    // Limit parameter (default show first 5)
     const limit = parseInt(req.query.limit) || 5;
     const showFull = req.query.full === "true";
 
@@ -360,10 +496,13 @@ router.get("/vectors", async (req, res) => {
 
     for (let i = 0; i < Math.min(limit, vectors.ids.length); i++) {
       const embedding = vectors.embeddings[i];
+      if (!embedding) continue;
 
       result.documents.push({
         id: vectors.ids[i],
         keyword: metadata.metadatas[i]?.keyword || "",
+        lob: metadata.metadatas[i]?.lob || "",
+        parentId: metadata.metadatas[i]?.parentId || "",
         searchableText: metadata.documents[i],
         embedding: showFull
           ? embedding
@@ -376,7 +515,6 @@ router.get("/vectors", async (req, res) => {
       });
     }
 
-    // If HTML format requested
     if (req.query.format === "html") {
       let html = `
 <!DOCTYPE html>
@@ -390,6 +528,7 @@ router.get("/vectors", async (req, res) => {
     .embedding { background: #1a1a2e; color: #0f0; padding: 10px; font-size: 11px; overflow-x: auto; white-space: nowrap; }
     .keyword { color: darkred; font-weight: bold; }
     .dim { color: gray; font-size: 12px; }
+    .lob-badge { display: inline-block; background: darkred; color: white; padding: 2px 6px; font-size: 10px; }
     table { border-collapse: collapse; width: 100%; }
     th, td { border: 1px solid #808080; padding: 8px; text-align: left; }
     th { background: navy; color: white; }
@@ -409,6 +548,7 @@ router.get("/vectors", async (req, res) => {
 
       result.documents.forEach((doc, idx) => {
         const emb = vectors.embeddings[idx];
+        if (!emb) return;
         const preview =
           emb
             .slice(0, 20)
@@ -422,7 +562,9 @@ router.get("/vectors", async (req, res) => {
   <div class="box">
     <p><strong>#${idx + 1}</strong> | <span class="keyword">${
           doc.keyword
-        }</span></p>
+        }</span>
+    ${doc.lob ? `<span class="lob-badge">${doc.lob}</span>` : ""}
+    ${doc.parentId ? `| Parent: ${doc.parentId}` : ""}</p>
     <p><strong>Searchable Text:</strong> ${doc.searchableText}</p>
     <p class="dim">Embedding (${emb.length} dimensions):</p>
     <div class="embedding">[${preview}]</div>
@@ -438,7 +580,10 @@ router.get("/vectors", async (req, res) => {
       <tr><td>/api/rag/vectors?format=html</td><td>This page</td></tr>
       <tr><td>/api/rag/vectors?limit=10</td><td>Show more documents</td></tr>
       <tr><td>/api/rag/vectors?full=true</td><td>Show complete embeddings</td></tr>
-      <tr><td>/api/rag/export?format=html</td><td>View all metadata</td></tr>
+      <tr><td>/api/rag/export?format=html</td><td>View all metadata (grouped by parent)</td></tr>
+      <tr><td>/api/rag/parents</td><td>View all parent LOB schemas</td></tr>
+      <tr><td>/api/rag/stats</td><td>Knowledge base statistics with LOB breakdown</td></tr>
+      <tr><td>/api/rag/lob-types</td><td>List supported LOB types</td></tr>
     </table>
   </div>
 </body>
@@ -454,7 +599,7 @@ router.get("/vectors", async (req, res) => {
 });
 
 /**
- * Test embedding - convert any text to a vector to see how it works
+ * Test embedding - convert any text to a vector
  */
 router.post("/test-embedding", async (req, res) => {
   try {
@@ -473,6 +618,12 @@ router.post("/test-embedding", async (req, res) => {
       RAG_CONFIG.EMBEDDING.TASK_TYPES.SEARCH,
     );
     const duration = Date.now() - startTime;
+
+    if (!embedding) {
+      return res
+        .status(400)
+        .json({ error: "Could not generate embedding for the provided text" });
+    }
 
     res.json({
       inputText: text,

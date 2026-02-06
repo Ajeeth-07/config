@@ -1,7 +1,10 @@
 /**
- * Vector Store Service
- * File-based vector storage for RAG system
- * Works out of the box without requiring a separate server
+ * Vector Store Service - Parent-Child Architecture
+ *
+ * Parent documents: LOB schema summaries (one per lob+insurer+product combo)
+ * Child documents:  Individual keyword configs (linked to parent via parentId)
+ *
+ * Retrieval: search children, then enrich with parent context.
  */
 
 const { RAG_CONFIG } = require("./config");
@@ -9,123 +12,364 @@ const {
   embedText,
   embedBatch,
   configToSearchableText,
+  parentToSearchableText,
   cosineSimilarity,
 } = require("./embeddingService");
 const path = require("path");
 const fs = require("fs");
 
+// ---------------------------------------------------------------------------
 // Storage paths
+// ---------------------------------------------------------------------------
 const DATA_DIR = path.resolve(__dirname, "..", "..", "data", "rag");
-const VECTORS_FILE = path.join(DATA_DIR, "vectors.json");
-const METADATA_FILE = path.join(DATA_DIR, "metadata.json");
 
-// In-memory store (loaded from files)
-let vectorStore = {
-  ids: [],
-  embeddings: [],
-  documents: [],
-  metadatas: [],
-};
+// New parent-child files
+const PARENT_VECTORS_FILE = path.join(DATA_DIR, "parent_vectors.json");
+const PARENT_METADATA_FILE = path.join(DATA_DIR, "parent_metadata.json");
+const CHILD_VECTORS_FILE = path.join(DATA_DIR, "child_vectors.json");
+const CHILD_METADATA_FILE = path.join(DATA_DIR, "child_metadata.json");
 
-/**
- * Ensure data directory exists
- */
+// Legacy flat files (for migration)
+const LEGACY_VECTORS_FILE = path.join(DATA_DIR, "vectors.json");
+const LEGACY_METADATA_FILE = path.join(DATA_DIR, "metadata.json");
+
+// ---------------------------------------------------------------------------
+// In-memory stores
+// ---------------------------------------------------------------------------
+function emptyStore() {
+  return { ids: [], embeddings: [], documents: [], metadatas: [] };
+}
+
+let parentStore = emptyStore();
+let childStore = emptyStore();
+
+// ---------------------------------------------------------------------------
+// Persistence helpers
+// ---------------------------------------------------------------------------
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 }
 
-/**
- * Save vector store to files
- */
 function saveStore() {
   ensureDataDir();
   fs.writeFileSync(
-    VECTORS_FILE,
+    CHILD_VECTORS_FILE,
+    JSON.stringify({ ids: childStore.ids, embeddings: childStore.embeddings }),
+  );
+  fs.writeFileSync(
+    CHILD_METADATA_FILE,
     JSON.stringify({
-      ids: vectorStore.ids,
-      embeddings: vectorStore.embeddings,
+      documents: childStore.documents,
+      metadatas: childStore.metadatas,
     }),
   );
   fs.writeFileSync(
-    METADATA_FILE,
+    PARENT_VECTORS_FILE,
     JSON.stringify({
-      documents: vectorStore.documents,
-      metadatas: vectorStore.metadatas,
+      ids: parentStore.ids,
+      embeddings: parentStore.embeddings,
+    }),
+  );
+  fs.writeFileSync(
+    PARENT_METADATA_FILE,
+    JSON.stringify({
+      documents: parentStore.documents,
+      metadatas: parentStore.metadatas,
     }),
   );
 }
 
-/**
- * Load vector store from files
- */
 function loadStore() {
   ensureDataDir();
+  let loaded = false;
 
   try {
-    if (fs.existsSync(VECTORS_FILE) && fs.existsSync(METADATA_FILE)) {
-      const vectors = JSON.parse(fs.readFileSync(VECTORS_FILE, "utf8"));
-      const metadata = JSON.parse(fs.readFileSync(METADATA_FILE, "utf8"));
-
-      vectorStore = {
-        ids: vectors.ids || [],
-        embeddings: vectors.embeddings || [],
-        documents: metadata.documents || [],
-        metadatas: metadata.metadatas || [],
+    // Load child store
+    if (
+      fs.existsSync(CHILD_VECTORS_FILE) &&
+      fs.existsSync(CHILD_METADATA_FILE)
+    ) {
+      const cv = JSON.parse(fs.readFileSync(CHILD_VECTORS_FILE, "utf8"));
+      const cm = JSON.parse(fs.readFileSync(CHILD_METADATA_FILE, "utf8"));
+      childStore = {
+        ids: cv.ids || [],
+        embeddings: cv.embeddings || [],
+        documents: cm.documents || [],
+        metadatas: cm.metadatas || [],
       };
+      loaded = true;
+    }
 
-      return true;
+    // Load parent store
+    if (
+      fs.existsSync(PARENT_VECTORS_FILE) &&
+      fs.existsSync(PARENT_METADATA_FILE)
+    ) {
+      const pv = JSON.parse(fs.readFileSync(PARENT_VECTORS_FILE, "utf8"));
+      const pm = JSON.parse(fs.readFileSync(PARENT_METADATA_FILE, "utf8"));
+      parentStore = {
+        ids: pv.ids || [],
+        embeddings: pv.embeddings || [],
+        documents: pm.documents || [],
+        metadatas: pm.metadatas || [],
+      };
     }
   } catch (error) {
     console.error("Error loading vector store:", error.message);
   }
 
-  return false;
+  return loaded;
 }
 
-/**
- * Initialize vector store
- */
-async function initVectorStore() {
-  const loaded = loadStore();
-  const count = vectorStore.ids.length;
-
-  if (loaded && count > 0) {
-    console.log(`Vector store loaded: ${count} documents`);
-  } else {
-    console.log("Vector store initialized (empty)");
+// ---------------------------------------------------------------------------
+// Migration from legacy flat store
+// ---------------------------------------------------------------------------
+function migrateLegacyStore() {
+  if (
+    !fs.existsSync(LEGACY_VECTORS_FILE) ||
+    !fs.existsSync(LEGACY_METADATA_FILE)
+  ) {
+    return false;
   }
+
+  // Already migrated?
+  if (fs.existsSync(CHILD_VECTORS_FILE)) {
+    return false;
+  }
+
+  try {
+    console.log("Migrating legacy flat vector store to parent-child format...");
+
+    const legacyVectors = JSON.parse(
+      fs.readFileSync(LEGACY_VECTORS_FILE, "utf8"),
+    );
+    const legacyMeta = JSON.parse(
+      fs.readFileSync(LEGACY_METADATA_FILE, "utf8"),
+    );
+
+    const ids = legacyVectors.ids || [];
+    const embeddings = legacyVectors.embeddings || [];
+    const documents = legacyMeta.documents || [];
+    const metadatas = legacyMeta.metadatas || [];
+
+    if (ids.length === 0) {
+      console.log("Legacy store is empty, nothing to migrate.");
+      return false;
+    }
+
+    // Group children by insurer+product to create parents
+    const groups = {};
+    metadatas.forEach((m, i) => {
+      const insurer = m.insurer || "unknown";
+      const product = m.product || "general";
+      const parentId = `general_${insurer}_${product}`;
+      if (!groups[parentId]) {
+        groups[parentId] = {
+          insurer,
+          product,
+          lob: "general",
+          childIndices: [],
+        };
+      }
+      groups[parentId].childIndices.push(i);
+    });
+
+    // Build parent documents and tag children
+    for (const [parentId, group] of Object.entries(groups)) {
+      const childMetas = group.childIndices.map((i) => metadatas[i]);
+      const keywords = childMetas
+        .map((m) => m.keyword)
+        .filter(Boolean)
+        .slice(0, RAG_CONFIG.PARENT_CHILD.PARENT_SUMMARY_MAX_KEYWORDS);
+      const categories = [
+        ...new Set(childMetas.map((m) => m.sourceSheet).filter(Boolean)),
+      ];
+
+      const parentMeta = {
+        type: "parent",
+        lob: group.lob,
+        insurer: group.insurer,
+        product: group.product,
+        fieldCount: group.childIndices.length,
+        sampleKeywords: keywords,
+        fieldCategories: categories,
+        summary: `${group.lob} insurance fields from ${group.insurer} (${
+          group.product
+        }): ${keywords.slice(0, 10).join(", ")}`,
+      };
+
+      const parentText = parentToSearchableText(parentMeta);
+      parentStore.ids.push(parentId);
+      parentStore.embeddings.push(null); // Will be re-embedded on first use
+      parentStore.documents.push(parentText);
+      parentStore.metadatas.push(parentMeta);
+
+      // Tag children with parentId
+      group.childIndices.forEach((i) => {
+        metadatas[i].parentId = parentId;
+        metadatas[i].lob = group.lob;
+        metadatas[i].type = "child";
+      });
+    }
+
+    // Move legacy data into child store
+    childStore = { ids, embeddings, documents, metadatas };
+
+    // Save new format
+    saveStore();
+
+    // Rename legacy files so migration doesn't repeat
+    fs.renameSync(
+      LEGACY_VECTORS_FILE,
+      path.join(DATA_DIR, "vectors.json.migrated"),
+    );
+    fs.renameSync(
+      LEGACY_METADATA_FILE,
+      path.join(DATA_DIR, "metadata.json.migrated"),
+    );
+
+    console.log(
+      `Migration complete: ${childStore.ids.length} children, ${parentStore.ids.length} parents`,
+    );
+    return true;
+  } catch (error) {
+    console.error("Migration failed:", error.message);
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Initialization
+// ---------------------------------------------------------------------------
+async function initVectorStore() {
+  // Try loading new format first
+  const loaded = loadStore();
+
+  if (!loaded || childStore.ids.length === 0) {
+    // Attempt migration from legacy flat format
+    const migrated = migrateLegacyStore();
+    if (!migrated && childStore.ids.length === 0) {
+      console.log("Vector store initialized (empty)");
+      return { success: true, count: 0, parents: 0, dataDir: DATA_DIR };
+    }
+  }
+
+  const childCount = childStore.ids.length;
+  const parentCount = parentStore.ids.length;
+  console.log(
+    `Vector store loaded: ${childCount} children, ${parentCount} parents`,
+  );
 
   return {
     success: true,
-    count,
+    count: childCount,
+    parents: parentCount,
     dataDir: DATA_DIR,
   };
 }
 
+// ---------------------------------------------------------------------------
+// Parent operations
+// ---------------------------------------------------------------------------
+
 /**
- * Get collection (for compatibility)
+ * Generate a deterministic parent ID from lob + insurer + product
  */
-async function getCollection() {
-  if (vectorStore.ids.length === 0) {
-    loadStore();
-  }
-  return vectorStore;
+function makeParentId(lob, insurer, product) {
+  return `${lob}_${insurer}_${product}`.toLowerCase().replace(/\s+/g, "_");
 }
 
 /**
- * Add input configurations to the vector store
- * @param {Object[]} configs - Array of input configuration objects
- * @param {string} insurer - Insurer name for metadata
- * @param {string} product - Product name for metadata
- * @param {Function} onProgress - Progress callback
- * @returns {Promise<Object>} Result with count of added documents
+ * Create or update a parent document
+ * @param {Object} parentMeta - Parent metadata (lob, insurer, product, fieldCount, sampleKeywords, fieldCategories, summary)
+ * @returns {Promise<string>} The parent ID
+ */
+async function addParent(parentMeta) {
+  const parentId = makeParentId(
+    parentMeta.lob,
+    parentMeta.insurer,
+    parentMeta.product,
+  );
+
+  const existingIdx = parentStore.ids.indexOf(parentId);
+  const text = parentToSearchableText(parentMeta);
+
+  // Generate embedding
+  const embedding = await embedText(
+    text,
+    RAG_CONFIG.EMBEDDING.TASK_TYPES.STORE,
+  );
+
+  const meta = {
+    type: "parent",
+    ...parentMeta,
+  };
+
+  if (existingIdx >= 0) {
+    // Update existing parent
+    parentStore.documents[existingIdx] = text;
+    parentStore.metadatas[existingIdx] = meta;
+    parentStore.embeddings[existingIdx] = embedding;
+  } else {
+    // Add new parent
+    parentStore.ids.push(parentId);
+    parentStore.documents.push(text);
+    parentStore.metadatas.push(meta);
+    parentStore.embeddings.push(embedding);
+  }
+
+  saveStore();
+  return parentId;
+}
+
+/**
+ * Fetch a parent document by ID
+ * @param {string} parentId
+ * @returns {Object|null} Parent metadata or null
+ */
+function getParent(parentId) {
+  const idx = parentStore.ids.indexOf(parentId);
+  if (idx < 0) return null;
+  return {
+    id: parentStore.ids[idx],
+    document: parentStore.documents[idx],
+    metadata: parentStore.metadatas[idx],
+  };
+}
+
+/**
+ * Get all parent documents
+ * @returns {Object[]}
+ */
+function getAllParents() {
+  return parentStore.ids.map((id, idx) => ({
+    id,
+    document: parentStore.documents[idx],
+    metadata: parentStore.metadatas[idx],
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Child operations (mostly unchanged from the old addConfigs / searchSimilar)
+// ---------------------------------------------------------------------------
+
+/**
+ * Add child configurations linked to a parent
+ * @param {Object[]} configs - Configuration objects
+ * @param {string} insurer
+ * @param {string} product
+ * @param {string} lob - Line of Business
+ * @param {string} parentId - Parent document ID
+ * @param {Function} onProgress
  */
 async function addConfigs(
   configs,
   insurer = "unknown",
   product = "unknown",
+  lob = "general",
+  parentId = null,
   onProgress = null,
 ) {
   const log = (msg) => {
@@ -135,13 +379,11 @@ async function addConfigs(
 
   log(`Preparing ${configs.length} configurations for embedding...`);
 
-  // Prepare documents
   const newDocuments = [];
   const newMetadatas = [];
   const newIds = [];
 
   configs.forEach((config, idx) => {
-    // Create searchable text
     const searchText = configToSearchableText({
       ...config,
       insurer,
@@ -150,8 +392,10 @@ async function addConfigs(
 
     newDocuments.push(searchText);
 
-    // Store full config as metadata
     newMetadatas.push({
+      type: "child",
+      parentId: parentId || makeParentId(lob, insurer, product),
+      lob,
       keyword: config.keyword || config.uniqueIdentifier || "",
       keywordcaption: config.keywordcaption || config.label || "",
       keywordtype: config.keywordtype || config.dataType || "",
@@ -162,19 +406,17 @@ async function addConfigs(
       maxlength: String(config.maxlength || ""),
       keyminvalue: String(config.keyminvalue || ""),
       keymaxvalue: String(config.keymaxvalue || ""),
-      insurer: insurer,
-      product: product,
+      insurer,
+      product,
       mappedFrom: config.mappedFrom || "",
       sourceSheet: config.sourceSheet || "",
     });
 
-    // Generate unique ID
     const keyword =
       config.keyword || config.uniqueIdentifier || `config_${idx}`;
-    newIds.push(`${insurer}_${product}_${keyword}_${Date.now()}_${idx}`);
+    newIds.push(`${lob}_${insurer}_${product}_${keyword}_${Date.now()}_${idx}`);
   });
 
-  // Generate embeddings in batches
   log("Generating embeddings (this may take a while)...");
   const newEmbeddings = await embedBatch(
     newDocuments,
@@ -182,26 +424,24 @@ async function addConfigs(
     onProgress,
   );
 
-  // Add to store - ONLY add documents with valid embeddings
   log("Storing in vector database...");
   let addedCount = 0;
 
   for (let i = 0; i < newEmbeddings.length; i++) {
     if (newEmbeddings[i] !== null) {
-      vectorStore.ids.push(newIds[i]);
-      vectorStore.embeddings.push(newEmbeddings[i]);
-      vectorStore.documents.push(newDocuments[i]);
-      vectorStore.metadatas.push(newMetadatas[i]);
+      childStore.ids.push(newIds[i]);
+      childStore.embeddings.push(newEmbeddings[i]);
+      childStore.documents.push(newDocuments[i]);
+      childStore.metadatas.push(newMetadatas[i]);
       addedCount++;
     }
   }
 
-  // Save to files
   saveStore();
 
-  const totalCount = vectorStore.ids.length;
+  const totalCount = childStore.ids.length;
   log(
-    `Done! Added ${addedCount} documents (skipped ${
+    `Done! Added ${addedCount} children (skipped ${
       newDocuments.length - addedCount
     } invalid). Total: ${totalCount}`,
   );
@@ -215,108 +455,80 @@ async function addConfigs(
 }
 
 /**
- * Search for similar configurations
- * DOES NOT filter by insurer - uses pure semantic similarity
- * "pan card" from Kotak should match "pan no" from IPRU
- * @param {string} query - Search query (field name, caption, etc.)
- * @param {Object} options - Search options
- * @returns {Promise<Object[]>} Array of similar configurations with scores
+ * Search child documents for similar configurations, then enrich with parent
  */
 async function searchSimilar(query, options = {}) {
   const {
     topK = RAG_CONFIG.RETRIEVAL.TOP_K,
-    // insurer filter is REMOVED - we want cross-insurer matching
     minSimilarity = RAG_CONFIG.RETRIEVAL.MIN_SIMILARITY,
+    lob = null, // Optional LOB filter for parent boost
   } = options;
 
-  if (vectorStore.ids.length === 0) {
-    return [];
-  }
+  if (childStore.ids.length === 0) return [];
+  if (!query || query.trim().length === 0) return [];
 
-  // Handle empty query
-  if (!query || query.trim().length === 0) {
-    console.warn("Empty query for similarity search");
-    return [];
-  }
-
-  // Generate query embedding
   const queryEmbedding = await embedText(
     query,
     RAG_CONFIG.EMBEDDING.TASK_TYPES.SEARCH,
   );
+  if (!queryEmbedding) return [];
 
-  // Handle null embedding (empty or invalid text)
-  if (!queryEmbedding) {
-    console.warn(
-      "Could not generate embedding for query:",
-      query.substring(0, 50),
-    );
-    return [];
-  }
-
-  // Calculate similarities - NO insurer filtering for semantic cross-matching
   const similarities = [];
 
-  for (let i = 0; i < vectorStore.embeddings.length; i++) {
-    // Skip null embeddings in store
-    if (!vectorStore.embeddings[i]) continue;
+  for (let i = 0; i < childStore.embeddings.length; i++) {
+    if (!childStore.embeddings[i]) continue;
 
-    const similarity = cosineSimilarity(
-      queryEmbedding,
-      vectorStore.embeddings[i],
-    );
+    let similarity = cosineSimilarity(queryEmbedding, childStore.embeddings[i]);
+
+    // Apply parent LOB boost when the query LOB matches the child's parent LOB
+    if (lob && childStore.metadatas[i].lob === lob) {
+      similarity += RAG_CONFIG.RETRIEVAL.PARENT_BOOST;
+    }
 
     if (similarity >= minSimilarity) {
-      similarities.push({
-        index: i,
-        similarity,
-      });
+      similarities.push({ index: i, similarity });
     }
   }
 
-  // Sort by similarity (descending) and take top K
   similarities.sort((a, b) => b.similarity - a.similarity);
   const topResults = similarities.slice(0, topK);
 
-  // Debug logging for RAG performance (sample 5% of queries)
-  if (Math.random() < 0.05 && similarities.length > 0) {
-    const topSim = similarities[0]?.similarity?.toFixed(3) || "N/A";
-    console.log(
-      `RAG: ${
-        similarities.length
-      } matches (top: ${topSim}) for: "${query.substring(0, 50)}..."`,
-    );
-  }
+  // Enrich with parent context
+  return topResults.map((result) => {
+    const meta = childStore.metadatas[result.index];
+    const parent = meta.parentId ? getParent(meta.parentId) : null;
 
-  // Format results
-  return topResults.map((result) => ({
-    id: vectorStore.ids[result.index],
-    similarity: result.similarity.toFixed(4),
-    document: vectorStore.documents[result.index],
-    metadata: vectorStore.metadatas[result.index],
-  }));
+    return {
+      id: childStore.ids[result.index],
+      similarity: result.similarity.toFixed(4),
+      document: childStore.documents[result.index],
+      metadata: meta,
+      parent: parent
+        ? {
+            id: parent.id,
+            lob: parent.metadata.lob,
+            insurer: parent.metadata.insurer,
+            product: parent.metadata.product,
+            fieldCount: parent.metadata.fieldCount,
+            fieldCategories: parent.metadata.fieldCategories,
+          }
+        : null,
+    };
+  });
 }
 
 /**
- * Search for similar configurations given an input row from mapping sheet
- * Creates searchable text from row and finds semantically similar configs
- * @param {Object} inputRow - Row from mapping sheet (any column names)
- * @param {Object} options - Search options
- * @returns {Promise<Object[]>} Array of similar configurations
+ * Search for similar configs given an input row
  */
 async function findSimilarConfigs(inputRow, options = {}) {
   const searchText = configToSearchableText(inputRow);
-
-  // Skip if no searchable text could be extracted
   if (!searchText || searchText.trim().length === 0) {
-    // Log sample of what couldn't be extracted (for debugging)
     const sampleKeys = Object.keys(inputRow).slice(0, 5).join(", ");
     console.warn(`RAG: No searchable text from row with keys: ${sampleKeys}`);
     return [];
   }
 
-  // Log first few searches for debugging
-  const logSample = Math.random() < 0.02; // Log ~2% of searches
+  const logSample = Math.random() < 0.02;
   if (logSample) {
     console.log(`RAG Search: "${searchText.substring(0, 80)}..."`);
   }
@@ -324,89 +536,126 @@ async function findSimilarConfigs(inputRow, options = {}) {
   return searchSimilar(searchText, options);
 }
 
-/**
- * Get statistics about the knowledge base
- */
+// ---------------------------------------------------------------------------
+// Stats / management
+// ---------------------------------------------------------------------------
+
 async function getStats() {
-  // Collect unique insurers
   const insurerSet = new Set();
-  vectorStore.metadatas.forEach((m) => {
+  const lobSet = new Set();
+  childStore.metadatas.forEach((m) => {
     if (m.insurer) insurerSet.add(m.insurer);
+    if (m.lob) lobSet.add(m.lob);
+  });
+
+  // LOB breakdown
+  const lobBreakdown = {};
+  childStore.metadatas.forEach((m) => {
+    const lob = m.lob || "general";
+    if (!lobBreakdown[lob]) lobBreakdown[lob] = 0;
+    lobBreakdown[lob]++;
   });
 
   return {
-    totalDocuments: vectorStore.ids.length,
+    totalDocuments: childStore.ids.length,
+    totalParents: parentStore.ids.length,
     insurers: Array.from(insurerSet),
+    lobs: Array.from(lobSet),
+    lobBreakdown,
+    parents: parentStore.ids.map((id, idx) => ({
+      id,
+      lob: parentStore.metadatas[idx].lob,
+      insurer: parentStore.metadatas[idx].insurer,
+      product: parentStore.metadatas[idx].product,
+      fieldCount: parentStore.metadatas[idx].fieldCount,
+    })),
     dataDirectory: DATA_DIR,
   };
 }
 
-/**
- * Delete all documents from the store
- */
 async function clearCollection() {
-  const count = vectorStore.ids.length;
+  const childCount = childStore.ids.length;
+  const parentCount = parentStore.ids.length;
 
-  vectorStore = {
-    ids: [],
-    embeddings: [],
-    documents: [],
-    metadatas: [],
-  };
-
+  childStore = emptyStore();
+  parentStore = emptyStore();
   saveStore();
 
-  return { success: true, deleted: count };
+  return {
+    success: true,
+    deletedChildren: childCount,
+    deletedParents: parentCount,
+  };
 }
 
-/**
- * Delete documents by insurer
- */
 async function deleteByInsurer(insurer) {
-  const newStore = {
-    ids: [],
-    embeddings: [],
-    documents: [],
-    metadatas: [],
-  };
+  // Remove children for this insurer
+  const newChild = emptyStore();
+  let deletedChildren = 0;
 
-  let deleted = 0;
-
-  for (let i = 0; i < vectorStore.ids.length; i++) {
-    if (vectorStore.metadatas[i].insurer === insurer) {
-      deleted++;
+  for (let i = 0; i < childStore.ids.length; i++) {
+    if (childStore.metadatas[i].insurer === insurer) {
+      deletedChildren++;
     } else {
-      newStore.ids.push(vectorStore.ids[i]);
-      newStore.embeddings.push(vectorStore.embeddings[i]);
-      newStore.documents.push(vectorStore.documents[i]);
-      newStore.metadatas.push(vectorStore.metadatas[i]);
+      newChild.ids.push(childStore.ids[i]);
+      newChild.embeddings.push(childStore.embeddings[i]);
+      newChild.documents.push(childStore.documents[i]);
+      newChild.metadatas.push(childStore.metadatas[i]);
     }
   }
+  childStore = newChild;
 
-  vectorStore = newStore;
+  // Remove parents for this insurer
+  const newParent = emptyStore();
+  let deletedParents = 0;
+
+  for (let i = 0; i < parentStore.ids.length; i++) {
+    if (parentStore.metadatas[i].insurer === insurer) {
+      deletedParents++;
+    } else {
+      newParent.ids.push(parentStore.ids[i]);
+      newParent.embeddings.push(parentStore.embeddings[i]);
+      newParent.documents.push(parentStore.documents[i]);
+      newParent.metadatas.push(parentStore.metadatas[i]);
+    }
+  }
+  parentStore = newParent;
+
   saveStore();
-
-  return { success: true, deleted };
+  return { success: true, deletedChildren, deletedParents };
 }
 
-/**
- * Export data for inspection/backup
- */
 function exportData() {
   return {
-    count: vectorStore.ids.length,
-    configs: vectorStore.metadatas.map((meta, idx) => ({
-      id: vectorStore.ids[idx],
+    count: childStore.ids.length,
+    parentCount: parentStore.ids.length,
+    parents: parentStore.metadatas.map((meta, idx) => ({
+      id: parentStore.ids[idx],
       ...meta,
-      document: vectorStore.documents[idx],
+      document: parentStore.documents[idx],
+    })),
+    configs: childStore.metadatas.map((meta, idx) => ({
+      id: childStore.ids[idx],
+      ...meta,
+      document: childStore.documents[idx],
     })),
   };
+}
+
+// Compatibility helper
+async function getCollection() {
+  if (childStore.ids.length === 0) loadStore();
+  return childStore;
 }
 
 module.exports = {
   initVectorStore,
   getCollection,
   addConfigs,
+  addParent,
+  getParent,
+  getAllParents,
+  makeParentId,
   searchSimilar,
   findSimilarConfigs,
   getStats,

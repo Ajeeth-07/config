@@ -41,7 +41,7 @@ async function classifySheetWithAI(sheetName, columns, sampleRows) {
       })
       .join("\n");
 
-    const prompt = `You are analyzing an Excel sheet from an insurance company's system to determine its purpose.
+    const prompt = `You are analyzing an Excel sheet from an insurance company's system. Classify whether this sheet contains form field definitions that end-users fill in, or supporting/reference data.
 
 Sheet Name: "${sheetName}"
 Columns (${columns.length} total): ${columns.slice(0, 15).join(", ")}${
@@ -50,25 +50,21 @@ Columns (${columns.length} total): ${columns.slice(0, 15).join(", ")}${
 Sample Data:
 ${sampleDataStr}
 
-Classify this sheet into ONE of these categories:
+Classify into ONE category:
 
-1. "input_fields" - Sheet contains FORM FIELD DEFINITIONS that need to be configured
-   - Has columns like: Label, Field Name, Data Type, Required/Mandatory, Min/Max Length, Regex, etc.
-   - Each row represents a form input field (e.g., "First Name", "PAN Number", "Date of Birth")
-   - This is the PRIMARY data we need to process
+1. "input_fields" - Each row defines a UI form field that a user fills in
+   - Rows represent individual input fields (e.g., "First Name", "PAN Number", "Date of Birth")
+   - Typically has columns like: Label/Caption/Question, Data Type, Required/Mandatory
+   - Key test: does each row describe a field the end-user sees and fills in on a form?
+   - Examples: Application forms, questionnaires (health, NRI, hazardous), field mapping sheets
 
-2. "reference_context" - Sheet contains REFERENCE DATA useful for understanding the input fields
-   - Regex patterns (validation rules for fields like PAN, mobile, email)
-   - Code mappings (question codes, product codes)
-   - Dropdown values/master lists
-   - Validation rules or business rules
-   - This data provides CONTEXT but doesn't define input fields directly
+2. "reference_context" - Supporting data for understanding those input fields
+   - Regex/validation patterns (e.g., a sheet listing regex by pattern name like PAN_REGEX, MOBILE_REGEX)
+   - Code-to-question mappings, product-to-field mappings
+   - Master lists, dropdown values, lookup tables, category reference tables
+   - IMPORTANT: If rows are VALIDATION RULES keyed by pattern names (not individual form fields), classify as reference_context even if columns include "Mandatory", "MinLength", "Regex"
 
-3. "irrelevant" - Sheet is not useful for input configuration
-   - Compatibility reports
-   - System logs or audit data
-   - Metadata about the file itself
-   - Empty or test data
+3. "irrelevant" - Not useful (compatibility reports, system logs, empty sheets)
 
 Respond with ONLY a JSON object (no markdown):
 {
