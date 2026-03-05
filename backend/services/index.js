@@ -20,7 +20,7 @@ const {
 } = require("./utils/sheetClassifier");
 
 // Import services
-const { getOrCreateCache, getModel, cleanupCache } = require("./cacheService");
+const { getOrCreateCache, getModel, purgeCache } = require("./cacheService");
 const {
   generateExcelFile,
   generateListValuesFile,
@@ -650,8 +650,8 @@ async function processFilesWithProgress(
     log(`List values Excel created: ${listValuesFileName}`);
   }
 
-  // Step 7: Cleanup
-  await cleanupCache();
+  // Note: Cache is NOT deleted here — TTL handles natural expiration.
+  // If jsonRef changes on next request, getOrCreateCache() will purge early.
 
   const processingTime = ((Date.now() - startTime) / 1000).toFixed(2);
   log("-------------------------------------------");
@@ -734,6 +734,6 @@ module.exports = {
   toMarkdownTable,
   generateExcelFile,
   getOrCreateCache,
-  cleanupCache,
+  purgeCache,
   CONFIG,
 };
