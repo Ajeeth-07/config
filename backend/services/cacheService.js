@@ -2,12 +2,14 @@
  * Gemini Context Caching Service
  * Handles creation, retrieval, and reuse of cached context.
  *
- * Strategy:
- *  - Cache is reused across requests as long as the underlying jsonRef
- *    hasn't changed (compared via SHA-256 hash).
+ * Concurrency-safe design:
+ *  - Each unique jsonRef (identified by SHA-256 hash) gets its own isolated
+ *    cache entry in a Map, so concurrent requests with different payloads
+ *    never interfere with each other.
+ *  - Requests with the same jsonRef share and reuse a single cache.
  *  - TTL (configured in CONFIG.CACHE_TTL_SECONDS) handles natural expiration.
- *  - When jsonRef changes, the old cache is purged early (to save hourly
- *    storage costs) before a new one is created.
+ *  - Stale entries are swept from the Map on every getOrCreateCache() call
+ *    to prevent unbounded memory growth.
  */
 
 const crypto = require("crypto");
@@ -19,9 +21,15 @@ const { CONFIG, SYSTEM_INSTRUCTIONS } = require("./config");
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 const cacheManager = new GoogleAICacheManager(process.env.GEMINI_API_KEY);
 
-// In-memory state for cache reuse
-let currentCache = null;
-let currentCacheHash = null;
+/**
+ * Map of active caches, keyed by jsonRef SHA-256 hash.
+ * Value: { cache: Object, createdAt: number }
+ *
+ * This allows multiple concurrent requests with different jsonRef payloads
+ * to each have their own independent cache without overwriting each other.
+ * @type {Map<string, { cache: Object, createdAt: number }>}
+ */
+const cacheStore = new Map();
 
 /**
  * Compute a SHA-256 hash of the jsonRef to detect content changes
@@ -36,26 +44,44 @@ function computeJsonRefHash(jsonRef) {
 }
 
 /**
- * Verify that the current in-memory cache is still alive on the server.
- * Returns false if expired, deleted, or unreachable.
+ * Verify that a specific cache entry is still alive on the server.
+ * If expired/deleted server-side, removes it from the local Map.
+ * @param {string} hash - The jsonRef hash key
+ * @returns {boolean}
  */
-async function isCacheAlive() {
-  if (!currentCache) return false;
+async function isCacheAlive(hash) {
+  const entry = cacheStore.get(hash);
+  if (!entry) return false;
   try {
-    await cacheManager.get(currentCache.name);
+    await cacheManager.get(entry.cache.name);
     return true;
   } catch {
     // Cache was expired or deleted server-side
-    currentCache = null;
-    currentCacheHash = null;
+    cacheStore.delete(hash);
     return false;
   }
 }
 
 /**
+ * Remove Map entries whose TTL has likely elapsed (local clock estimate).
+ * This is a lightweight sweep to prevent unbounded Map growth; the real
+ * source of truth is the Gemini server, checked in isCacheAlive().
+ */
+function sweepExpiredEntries() {
+  const now = Date.now();
+  const ttlMs = CONFIG.CACHE_TTL_SECONDS * 1000;
+  for (const [hash, entry] of cacheStore) {
+    if (now - entry.createdAt > ttlMs) {
+      console.log(`  🧹 Sweeping expired cache entry (hash: ${hash.slice(0, 8)}…)`);
+      cacheStore.delete(hash);
+    }
+  }
+}
+
+/**
  * Create or retrieve cached content for the AI model.
- * Reuses the existing cache when jsonRef hasn't changed and the cache
- * is still alive. Otherwise purges the stale cache and creates a new one.
+ * Concurrent-safe: each unique jsonRef gets its own cache entry.
+ * Requests with the same jsonRef reuse the existing cache if it's still alive.
  *
  * @param {Object} jsonRef - JSON reference data to cache
  * @param {Object} structuralFingerprint - Structural metadata of mapping file
@@ -66,24 +92,22 @@ async function getOrCreateCache(jsonRef, structuralFingerprint) {
     return null;
   }
 
-  const newHash = computeJsonRefHash(jsonRef);
+  // Sweep locally-expired entries to keep the Map bounded
+  sweepExpiredEntries();
 
-  // Reuse existing cache if jsonRef is unchanged and cache is still alive
-  if (currentCache && currentCacheHash === newHash) {
-    const alive = await isCacheAlive();
+  const hash = computeJsonRefHash(jsonRef);
+
+  // Reuse existing cache if this jsonRef has one and it's still alive
+  if (cacheStore.has(hash)) {
+    const alive = await isCacheAlive(hash);
     if (alive) {
+      const entry = cacheStore.get(hash);
       console.log(
-        `  ♻️  Reusing existing cache: ${currentCache.name} (hash match)`,
+        `  ♻️  Reusing existing cache: ${entry.cache.name} (hash: ${hash.slice(0, 8)}…)`,
       );
-      return currentCache;
+      return entry.cache;
     }
     console.log("  ⏰ Previous cache expired server-side, will recreate");
-  }
-
-  // jsonRef changed — purge old cache early to save storage costs
-  if (currentCache && currentCacheHash !== newHash) {
-    console.log("  🔄 jsonRef changed — purging old cache early");
-    await purgeCache();
   }
 
   try {
@@ -107,8 +131,7 @@ async function getOrCreateCache(jsonRef, structuralFingerprint) {
     console.log(
       `  ✅ Cache created: ${cache.name} (TTL: ${CONFIG.CACHE_TTL_SECONDS}s)`,
     );
-    currentCache = cache;
-    currentCacheHash = newHash;
+    cacheStore.set(hash, { cache, createdAt: Date.now() });
     return cache;
   } catch (error) {
     console.log(`  ⚠️  Caching not available: ${error.message}`);
@@ -134,34 +157,52 @@ async function getModel(cache = null) {
 }
 
 /**
- * Force-purge the current cache from the server.
- * Use this only when you explicitly need to free storage early
- * (e.g. jsonRef changed). Normal expiration is handled by TTL.
+ * Force-purge a specific cache by its jsonRef, or purge ALL caches.
+ * Use when you explicitly need to free storage early.
+ * Normal expiration is handled by TTL — you rarely need this.
+ *
+ * @param {Object} [jsonRef] - If provided, purges only that jsonRef's cache.
+ *                             If omitted, purges all cached entries.
  */
-async function purgeCache() {
-  if (currentCache) {
-    try {
-      await cacheManager.delete(currentCache.name);
-      console.log(`  🗑️  Cache purged: ${currentCache.name}`);
-    } catch (error) {
-      // Ignore — cache may already be expired
+async function purgeCache(jsonRef) {
+  if (jsonRef) {
+    // Purge a specific entry
+    const hash = computeJsonRefHash(jsonRef);
+    const entry = cacheStore.get(hash);
+    if (entry) {
+      try {
+        await cacheManager.delete(entry.cache.name);
+        console.log(`  🗑️  Cache purged: ${entry.cache.name}`);
+      } catch {
+        // Ignore — cache may already be expired
+      }
+      cacheStore.delete(hash);
     }
-    currentCache = null;
-    currentCacheHash = null;
+  } else {
+    // Purge all entries
+    for (const [hash, entry] of cacheStore) {
+      try {
+        await cacheManager.delete(entry.cache.name);
+        console.log(`  🗑️  Cache purged: ${entry.cache.name}`);
+      } catch {
+        // Ignore — cache may already be expired
+      }
+    }
+    cacheStore.clear();
   }
 }
 
 /**
- * Get the current cache reference
- * @returns {Object|null} Current cache object
+ * Get the number of active cache entries (for diagnostics)
+ * @returns {number}
  */
-function getCurrentCache() {
-  return currentCache;
+function getCacheCount() {
+  return cacheStore.size;
 }
 
 module.exports = {
   getOrCreateCache,
   getModel,
   purgeCache,
-  getCurrentCache,
+  getCacheCount,
 };

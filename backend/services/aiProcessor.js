@@ -26,6 +26,7 @@ const { CONFIG } = require("./config");
 /**
  * @param {string} ragContext - RAG KB context (non-empty = has matches = low thinking)
  * @param {string} sheetRefContext - Reference context from context sheets (does NOT affect thinking)
+ * @param {boolean} isCacheBacked - If true, jsonRef is already in the Gemini cache; skip embedding it in the prompt
  */
 async function processRowBatch(
   model,
@@ -35,6 +36,7 @@ async function processRowBatch(
   columnHeaders,
   ragContext = "",
   sheetRefContext = "",
+  isCacheBacked = false,
 ) {
   // Convert rows to markdown table for better LLM understanding
   let rowsTable = "| " + columnHeaders.join(" | ") + " |\n";
@@ -80,8 +82,7 @@ The columns in the table above represent metadata about each input field. Common
 - List/Dropdown columns: "Values", "Options", "ListValues", "Master"
 - Description columns: "Description", "Label", "Caption"
 
-## JSON API Reference:
-${JSON.stringify(jsonRef, null, 2)}
+${isCacheBacked ? "## JSON API Reference:\n(Provided via context cache — do not repeat here)" : `## JSON API Reference:\n${JSON.stringify(jsonRef, null, 2)}`}
 
 ## TASK:
 For EACH ROW in the table above, generate ONE configuration object.
@@ -196,6 +197,7 @@ async function processRowBatchWithRAG(
   jsonRef,
   columnHeaders,
   ragResult,
+  isCacheBacked = false,
 ) {
   const allConfigs = [];
   let totalTokenUsage = {
@@ -256,6 +258,8 @@ async function processRowBatchWithRAG(
       jsonRef,
       columnHeaders,
       ragContext,
+      "",
+      isCacheBacked,
     );
 
     result.configs.forEach((config, idx) => {

@@ -351,6 +351,7 @@ async function processFilesWithProgress(
               columnHeaders,
               ragContext,
               referenceContext, // Sheet reference context (regex, codes) - always passed
+              cache !== null, // Skip jsonRef in prompt when cached
             );
 
             // Merge results
@@ -391,6 +392,7 @@ async function processFilesWithProgress(
             columnHeaders,
             "", // No RAG context = high thinking
             referenceContext, // Sheet reference context still passed
+            cache !== null, // Skip jsonRef in prompt when cached
           );
         }
 
