@@ -82,7 +82,9 @@ The columns in the table above represent metadata about each input field. Common
 - List/Dropdown columns: "Values", "Options", "ListValues", "Master"
 - Description columns: "Description", "Label", "Caption"
 
-${isCacheBacked ? "## JSON API Reference:\n(Provided via context cache — do not repeat here)" : `## JSON API Reference:\n${JSON.stringify(jsonRef, null, 2)}`}
+${isCacheBacked 
+  ? "## JSON API REFERENCE:\n(CRITICAL: The master JSON schema is loaded in your system context cache. You MUST validate all generated 'keyword' and 'keywordtype' values against this cached schema.)" 
+  : `## JSON API REFERENCE:\n${JSON.stringify(jsonRef, null, 2)}`}
 
 ## TASK:
 For EACH ROW in the table above, generate ONE configuration object.
@@ -145,6 +147,7 @@ Return ONLY a JSON array with ${batchRows.length} objects in this exact format:
     // Gemini 3 generation config with thinking level
     // See: https://ai.google.dev/gemini-api/docs/gemini-3#thinking_level
     const generationConfig = {
+      responseMimeType: "application/json",
       thinkingConfig: {
         thinkingLevel: thinkingLevel,
       },
@@ -165,13 +168,7 @@ Return ONLY a JSON array with ${batchRows.length} objects in this exact format:
       thinkingLevel: thinkingLevel, // Track which thinking level was used
     };
 
-    let text = response.text();
-    text = text
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
-      .trim();
-
-    const configs = JSON.parse(text);
+    const configs = JSON.parse(response.text());
 
     return {
       configs,
@@ -366,6 +363,7 @@ Generate values for ALL ${listConfigs.length} keywords. Return a flat array (not
 
   return await retryWithBackoff(async () => {
     const generationConfig = {
+      responseMimeType: "application/json",
       thinkingConfig: {
         thinkingLevel: thinkingLevel,
       },
@@ -385,13 +383,7 @@ Generate values for ALL ${listConfigs.length} keywords. Return a flat array (not
       thinkingLevel,
     };
 
-    let text = response.text();
-    text = text
-      .replace(/```json\n?/g, "")
-      .replace(/```\n?/g, "")
-      .trim();
-
-    const listValues = JSON.parse(text);
+    const listValues = JSON.parse(response.text());
 
     return {
       listValues: Array.isArray(listValues) ? listValues : [],

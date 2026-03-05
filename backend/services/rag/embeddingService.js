@@ -207,7 +207,7 @@ function configToSearchableText(config) {
     "title",
     "Question",
     "question",
-    "Health Details", // ICICI health sheets
+    "Health Details", 
     "Hazardous Question",
     "desc",
   ]);
@@ -238,7 +238,7 @@ function configToSearchableText(config) {
     "jsonTag",
     "Key",
     "key",
-    "Code", // Question codes like HQ01, HZQ1
+    "Code", 
     "Column",
     "column",
     "Attribute",
