@@ -26,25 +26,6 @@ async function getOrCreateCache(jsonRef, structuralFingerprint) {
   }
 
   try {
-    // Create cache content with system instructions and JSON reference
-    const cacheContent = `${SYSTEM_INSTRUCTIONS}
-
-## JSON API Reference (for field path mapping):
-${JSON.stringify(jsonRef, null, 2)}
-
-## Structural Overview:
-${JSON.stringify(
-  Object.entries(structuralFingerprint).map(([sheet, fp]) => ({
-    sheet,
-    columnCount: fp.columns.length,
-    clusters: Object.entries(fp.clusters)
-      .filter(([_, cols]) => cols.length > 0)
-      .map(([name, cols]) => `${name}: ${cols.length}`),
-  })),
-  null,
-  2,
-)}`;
-
     console.log("  📦 Creating context cache...");
 
     const cache = await cacheManager.create({
@@ -75,7 +56,7 @@ ${JSON.stringify(
 }
 
 /**
- * Get Gemini model - either from cache or regular initialization
+ * Get Gemini model - either from cache or regular initi    alization
  * @param {Object|null} cache - Cache object from getOrCreateCache
  * @returns {Object} Gemini model instance
  */
