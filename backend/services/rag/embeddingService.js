@@ -1,6 +1,7 @@
 /**
  * Embedding Service
  * Handles text to vector conversion using Gemini Embedding API
+ * Includes LRU query cache to avoid redundant API calls for repeated searches
  */
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -9,8 +10,94 @@ const { RAG_CONFIG } = require("./config");
 // Initialize Gemini client
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// ---------------------------------------------------------------------------
+// Query Embedding Cache (LRU with TTL)
+// Only caches RETRIEVAL_QUERY embeddings — ingestion always hits the API
+// ---------------------------------------------------------------------------
+const CACHE_CONFIG = {
+  MAX_SIZE: 500,        // Maximum cached query embeddings
+  TTL_MS: 5 * 60 * 1000, // 5 minutes
+};
+
+/**
+ * Simple LRU cache with TTL for query embeddings.
+ * Key: normalized query text, Value: { embedding, timestamp }
+ */
+const queryCache = new Map();
+
+/** Cache statistics for monitoring */
+const cacheStats = { hits: 0, misses: 0, evictions: 0 };
+
+/**
+ * Get a cached embedding if it exists and hasn't expired
+ * @param {string} key - Cache key (trimmed query text)
+ * @returns {number[]|null}
+ */
+function cacheGet(key) {
+  const entry = queryCache.get(key);
+  if (!entry) return null;
+
+  // Check TTL
+  if (Date.now() - entry.timestamp > CACHE_CONFIG.TTL_MS) {
+    queryCache.delete(key);
+    return null;
+  }
+
+  // Move to end (most recently used) by re-inserting
+  queryCache.delete(key);
+  queryCache.set(key, entry);
+  cacheStats.hits++;
+  return entry.embedding;
+}
+
+/**
+ * Store an embedding in the cache, evicting the oldest entry if at capacity
+ * @param {string} key - Cache key (trimmed query text)
+ * @param {number[]} embedding - The embedding vector
+ */
+function cacheSet(key, embedding) {
+  // Evict oldest entry if at max capacity
+  if (queryCache.size >= CACHE_CONFIG.MAX_SIZE) {
+    const oldestKey = queryCache.keys().next().value;
+    queryCache.delete(oldestKey);
+    cacheStats.evictions++;
+  }
+  queryCache.set(key, { embedding, timestamp: Date.now() });
+  cacheStats.misses++;
+}
+
+/**
+ * Get cache statistics for monitoring
+ * @returns {Object} Cache stats
+ */
+function getQueryCacheStats() {
+  const total = cacheStats.hits + cacheStats.misses;
+  return {
+    size: queryCache.size,
+    maxSize: CACHE_CONFIG.MAX_SIZE,
+    ttlMs: CACHE_CONFIG.TTL_MS,
+    hits: cacheStats.hits,
+    misses: cacheStats.misses,
+    evictions: cacheStats.evictions,
+    hitRate: total > 0 ? ((cacheStats.hits / total) * 100).toFixed(1) + "%" : "N/A",
+  };
+}
+
+/**
+ * Clear the query cache (useful for testing or manual reset)
+ */
+function clearQueryCache() {
+  queryCache.clear();
+  cacheStats.hits = 0;
+  cacheStats.misses = 0;
+  cacheStats.evictions = 0;
+}
+
 /**
  * Generate embeddings for a single text
+ * Search queries (RETRIEVAL_QUERY) are cached to avoid redundant API calls.
+ * Ingestion embeddings (RETRIEVAL_DOCUMENT) always call the API.
+ *
  * @param {string} text - Text to embed
  * @param {string} taskType - Task type for optimization
  * @returns {Promise<number[]|null>} Embedding vector or null if text is empty
@@ -25,17 +112,35 @@ async function embedText(
     return null;
   }
 
+  const trimmed = text.trim();
+
+  // Check cache for search queries only
+  const isSearchQuery = taskType === RAG_CONFIG.EMBEDDING.TASK_TYPES.SEARCH;
+  if (isSearchQuery) {
+    const cached = cacheGet(trimmed);
+    if (cached) {
+      return cached;
+    }
+  }
+
   try {
     const model = genAI.getGenerativeModel({
       model: RAG_CONFIG.EMBEDDING.MODEL,
     });
 
     const result = await model.embedContent({
-      content: { parts: [{ text: text.trim() }] },
+      content: { parts: [{ text: trimmed }] },
       taskType: taskType,
     });
 
-    return result.embedding.values;
+    const embedding = result.embedding.values;
+
+    // Cache search query embeddings
+    if (isSearchQuery && embedding) {
+      cacheSet(trimmed, embedding);
+    }
+
+    return embedding;
   } catch (error) {
     console.error("Embedding error:", error.message);
     // Return null instead of throwing - allows batch processing to continue
@@ -422,4 +527,6 @@ module.exports = {
   configToSearchableText,
   parentToSearchableText,
   cosineSimilarity,
+  getQueryCacheStats,
+  clearQueryCache,
 };

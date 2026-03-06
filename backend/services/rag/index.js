@@ -10,6 +10,8 @@ const {
   configToSearchableText,
   parentToSearchableText,
   cosineSimilarity,
+  getQueryCacheStats,
+  clearQueryCache,
 } = require("./embeddingService");
 const {
   initVectorStore,
@@ -56,6 +58,8 @@ module.exports = {
   configToSearchableText,
   parentToSearchableText,
   cosineSimilarity,
+  getQueryCacheStats,
+  clearQueryCache,
 
   // Vector Store
   initVectorStore,

@@ -19,6 +19,8 @@ const {
   deleteByInsurer,
   searchSimilar,
   getKnowledgeBaseStats,
+  getQueryCacheStats,
+  clearQueryCache,
 } = require("../services/rag");
 
 // Import export function directly
@@ -108,7 +110,8 @@ router.post("/init", async (req, res) => {
 router.get("/stats", async (req, res) => {
   try {
     const stats = await getKnowledgeBaseStats();
-    res.json(stats);
+    const cacheStats = getQueryCacheStats();
+    res.json({ ...stats, queryCache: cacheStats });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
