@@ -26,6 +26,7 @@ const {
   getStats,
   clearCollection,
   deleteByInsurer,
+  getBM25Stats,
 } = require("./vectorStore");
 const {
   loadExcelFile,
@@ -74,6 +75,7 @@ module.exports = {
   getStats,
   clearCollection,
   deleteByInsurer,
+  getBM25Stats,
 
   // Ingestion
   loadExcelFile,

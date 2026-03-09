@@ -50,6 +50,13 @@ const RAG_CONFIG = {
     SIZE: 50,
     DELAY_MS: 500,
   },
+
+  // Hybrid search: combines vector cosine similarity with BM25 keyword scoring
+  // final_score = ALPHA × cosine_similarity + (1 - ALPHA) × bm25_score
+  HYBRID_SEARCH: {
+    ENABLE: true,       // Set to false to use pure vector search
+    ALPHA: 0.7,         // 0.7 = favor semantic, 0.3 = favor keyword
+  },
 };
 
 // Metadata schema for input configurations

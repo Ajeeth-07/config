@@ -15,6 +15,12 @@ const {
   parentToSearchableText,
   cosineSimilarity,
 } = require("./embeddingService");
+const {
+  buildIndex: buildBM25Index,
+  scoreBatch: bm25ScoreBatch,
+  needsRebuild: bm25NeedsRebuild,
+  getBM25Stats,
+} = require("./bm25Service");
 const path = require("path");
 const fs = require("fs");
 
@@ -444,6 +450,9 @@ async function addConfigs(
 
   saveStore();
 
+  // Rebuild BM25 index with updated corpus
+  ensureBM25Index();
+
   const totalCount = childStore.ids.length;
   log(
     `Done! Added ${addedCount} children (skipped ${
@@ -460,7 +469,22 @@ async function addConfigs(
 }
 
 /**
- * Search child documents for similar configurations, then enrich with parent
+ * Ensure the BM25 index is up-to-date with the current child store.
+ * Lazily rebuilds only when the corpus size changes.
+ */
+function ensureBM25Index() {
+  if (bm25NeedsRebuild(childStore.documents.length)) {
+    buildBM25Index(childStore.documents);
+  }
+}
+
+/**
+ * Search child documents using hybrid search (vector + BM25), then enrich with parent.
+ *
+ * Hybrid scoring formula:
+ *   final_score = α × cosine_similarity + (1 - α) × bm25_score
+ *
+ * When HYBRID_SEARCH is disabled, falls back to pure vector search.
  */
 async function searchSimilar(query, options = {}) {
   const {
@@ -479,12 +503,10 @@ async function searchSimilar(query, options = {}) {
   );
   if (!queryEmbedding) return [];
 
-  const similarities = [];
-
+  // Determine which indices are candidates (apply docType filter early)
+  const candidateIndices = [];
   for (let i = 0; i < childStore.embeddings.length; i++) {
     if (!childStore.embeddings[i]) continue;
-
-    // Filter by docType if specified
     if (
       docType &&
       childStore.metadatas[i].docType &&
@@ -492,21 +514,47 @@ async function searchSimilar(query, options = {}) {
     ) {
       continue;
     }
+    candidateIndices.push(i);
+  }
 
-    let similarity = cosineSimilarity(queryEmbedding, childStore.embeddings[i]);
+  if (candidateIndices.length === 0) return [];
+
+  // --- BM25 scoring (keyword-based) ---
+  const hybridEnabled = RAG_CONFIG.HYBRID_SEARCH?.ENABLE !== false;
+  const alpha = RAG_CONFIG.HYBRID_SEARCH?.ALPHA ?? 0.7;
+
+  let bm25Scores = new Map();
+  if (hybridEnabled) {
+    ensureBM25Index();
+    bm25Scores = bm25ScoreBatch(query, candidateIndices);
+  }
+
+  // --- Compute hybrid scores ---
+  const results = [];
+
+  for (const i of candidateIndices) {
+    let cosineScore = cosineSimilarity(queryEmbedding, childStore.embeddings[i]);
 
     // Apply parent LOB boost when the query LOB matches the child's parent LOB
     if (lob && childStore.metadatas[i].lob === lob) {
-      similarity += RAG_CONFIG.RETRIEVAL.PARENT_BOOST;
+      cosineScore += RAG_CONFIG.RETRIEVAL.PARENT_BOOST;
     }
 
-    if (similarity >= minSimilarity) {
-      similarities.push({ index: i, similarity });
+    let finalScore;
+    if (hybridEnabled) {
+      const bm25Score = bm25Scores.get(i) || 0;
+      finalScore = alpha * cosineScore + (1 - alpha) * bm25Score;
+    } else {
+      finalScore = cosineScore;
+    }
+
+    if (finalScore >= minSimilarity) {
+      results.push({ index: i, similarity: finalScore, cosineScore, bm25Score: bm25Scores.get(i) || 0 });
     }
   }
 
-  similarities.sort((a, b) => b.similarity - a.similarity);
-  const topResults = similarities.slice(0, topK);
+  results.sort((a, b) => b.similarity - a.similarity);
+  const topResults = results.slice(0, topK);
 
   // Enrich with parent context
   return topResults.map((result) => {
@@ -516,6 +564,8 @@ async function searchSimilar(query, options = {}) {
     return {
       id: childStore.ids[result.index],
       similarity: result.similarity.toFixed(4),
+      cosineScore: result.cosineScore.toFixed(4),
+      bm25Score: result.bm25Score.toFixed(4),
       document: childStore.documents[result.index],
       metadata: meta,
       parent: parent
@@ -577,6 +627,11 @@ async function getStats() {
     insurers: Array.from(insurerSet),
     lobs: Array.from(lobSet),
     lobBreakdown,
+    bm25: getBM25Stats(),
+    hybridSearch: {
+      enabled: RAG_CONFIG.HYBRID_SEARCH?.ENABLE !== false,
+      alpha: RAG_CONFIG.HYBRID_SEARCH?.ALPHA ?? 0.7,
+    },
     parents: parentStore.ids.map((id, idx) => ({
       id,
       lob: parentStore.metadatas[idx].lob,
@@ -595,6 +650,9 @@ async function clearCollection() {
   childStore = emptyStore();
   parentStore = emptyStore();
   saveStore();
+
+  // Reset BM25 index
+  buildBM25Index([]);
 
   return {
     success: true,
@@ -637,6 +695,10 @@ async function deleteByInsurer(insurer) {
   parentStore = newParent;
 
   saveStore();
+
+  // Rebuild BM25 index after deletion
+  buildBM25Index(childStore.documents);
+
   return { success: true, deletedChildren, deletedParents };
 }
 
@@ -678,4 +740,5 @@ module.exports = {
   deleteByInsurer,
   exportData,
   DATA_DIR,
+  getBM25Stats,
 };
